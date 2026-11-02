@@ -47,6 +47,18 @@ This is a metadata/schema/artifact check, not full video decoding or full sensor
 validation. Both `0_127_data_lerobot` (format reference) and `209_213_data_lerobot`
 (current test material) have v2.1 layout. Do not write into their remote mount.
 
+For a local video/task preview of a delivered dataset, without adding files to it:
+
+```bash
+python scripts/preview_lerobot.py --input /local/delivery/annotated_lerobot \
+  --html /local/annotation-work/preview.html
+```
+
+The page reads native Parquet task_index labels, highlights the current interval,
+and switches between the preserved camera videos. Serve a common local parent
+directory on 127.0.0.1 when browser file playback is restricted. Do not expose
+private dataset directories on a public bind address.
+
 For actual annotation:
 
 ```bash
@@ -60,10 +72,22 @@ python -m lerobot_annotation run \
 ```
 
 Input, output and work must be separate disjoint directories. Output must be NEW.
+For a bounded real-model trial add `--episode-limit 1`: the input stays on the
+read-only remote mount and only episode_000000 is processed. The delivered
+metadata explicitly declares a one-episode subset. No source snapshot or full
+input copy is made; streaming reads still transfer data over the network. Local
+storage is required for the rewritten Parquet, copied result videos and temporary
+model clips. Arbitrary non-prefix selections are not supported because they
+require a different episode/global-index mapping contract.
 The job reads cam0 (user-designated primary view), checks each decoded window,
 calls the existing Ark client and automatically validates complete chronological
 step coverage. Window-local seconds are converted to source-frame ranges.
 Boundaries remain VLM estimates, not frame-accurate verified event labels.
+Response seconds are validated on the nearest original source-frame grid. A
+printed duration such as 27.333 seconds for an 820-frame/30-FPS clip is accepted
+only when it rounds to the exact final frame. Real gaps, overlaps and overruns
+are rejected; times are not clamped to conceal missing or extra frames. Saved
+responses are revalidated before any additional paid API call.
 cam1/cam2 bytes are preserved; multi-view inference is a later phase.
 
 Idle/repositioning can be labeled. Unknown laterality is expressed in text.

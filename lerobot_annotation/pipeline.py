@@ -11,6 +11,7 @@ import shutil
 
 from .dataset import (artifact, atomic_json, export_dataset, inspect, path_for,
                       read_json, sha256, validate_output, validate_segments)
+from .dataset import select_prefix
 from .model import ArkAnnotator, PROMPT, windows
 import hashlib
 
@@ -62,14 +63,17 @@ def require_space(source, output):
 
 
 def run(input_root, output_root, work_root, *, model, video_fps=5.0,
-        window_seconds=30.0, attempts=2, max_calls=300, annotator=None):
+        window_seconds=30.0, attempts=2, max_calls=300, annotator=None,
+        episode_limit=None):
     work = Path(work_root).resolve()
     source = preflight(input_root, output_root, work)
+    source = select_prefix(source, episode_limit)
     output = Path(output_root).resolve()
     with job_lock(work):
         config = {"source_signature": source["signature"], "source_root": str(source["root"]),
                   "output_root": str(output), "model": model, "camera": "observation.images.cam0",
                   "video_fps": video_fps, "window_seconds": window_seconds,
+                  "episode_limit": episode_limit,
                   "prompt_sha256": hashlib.sha256(PROMPT.encode()).hexdigest(),
                   "api_base": os.environ.get("API_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")}
         if (work / "job_config.json").exists() and read_json(work / "job_config.json") != config:
@@ -103,7 +107,8 @@ def run(input_root, output_root, work_root, *, model, video_fps=5.0,
         atomic_json(work / "status.json", summary)
         # Original source task/provenance stays in work, never mixed into delivery.
         atomic_json(work / "source_metadata.json", {"info": source["info"], "tasks": source["tasks"],
-                    "episodes": source["episodes"], "metadata_hashes": source["metadata_hashes"]})
+                    "episodes": source["episodes"], "metadata_hashes": source["metadata_hashes"],
+                    "original_info": source.get("original_info", source["info"])})
         labels = {}
         job_id = hashlib.sha256(str(work).encode()).hexdigest()[:12]
         building = output.with_name("." + output.name + ".annotation-building-" + job_id)

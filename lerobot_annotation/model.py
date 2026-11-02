@@ -47,22 +47,21 @@ def normalize_response(raw, *, start, end, fps):
     if not isinstance(payload, dict) or set(payload) != {"steps"} or not isinstance(payload["steps"], list):
         raise ValueError("Expected exactly a steps array")
     result = []
-    previous = 0.0
-    duration = (end - start) / fps
     for row in payload["steps"]:
         if not isinstance(row, dict) or set(row) != {"start_sec", "end_sec", "text", "evidence_status"}:
             raise ValueError("Unexpected step schema")
         a, b = row["start_sec"], row["end_sec"]
         if any(type(x) not in (int, float) or not math.isfinite(x) for x in (a, b)):
             raise ValueError("Invalid model timestamp")
-        if not (0 <= a < b <= duration + 1e-6) or abs(a - previous) > 1e-6:
-            raise ValueError("Model times do not cover clip continuously")
+        # The contract delivered to training is integer source frames. Decimal
+        # printing such as 27.333 instead of 27.333333333 is not a missing frame.
+        # Never clamp overruns: rounding must itself land inside the source.
+        first, stop = round(a * fps), round(b * fps)
+        if not (0 <= a < b and 0 <= first < stop <= end - start):
+            raise ValueError("Model times quantize outside the clip or to an empty interval")
         result.append({"start_frame": start + round(a * fps),
-                       "end_frame": min(end, start + round(b * fps)),
+                       "end_frame": start + stop,
                        "text": row["text"], "evidence_status": row["evidence_status"]})
-        previous = b
-    if abs(previous - duration) > 1e-6:
-        raise ValueError("Model omitted the clip tail")
     # Rebase for the shared complete-coverage validator.
     validate_segments([{**s, "start_frame": s["start_frame"] - start,
                         "end_frame": s["end_frame"] - start} for s in result], end - start)
@@ -100,6 +99,19 @@ class ArkAnnotator:
             labels = read_json(cache)
             validate_segments([{**s, "start_frame": s["start_frame"] - start,
                                 "end_frame": s["end_frame"] - start} for s in labels], end - start)
+            return labels
+        # A transport-successful response may have failed a previous parser.
+        # Revalidate persisted responses before spending another model call.
+        for response in sorted(work.glob("response_*.txt")):
+            try:
+                labels = normalize_response(response.read_text(), start=start, end=end, fps=fps)
+            except (ValueError, TypeError, KeyError):
+                continue
+            atomic_json(work / "revalidated_response.json", {
+                "source_response": response.name,
+                "normalization": "nearest_source_frame_v2",
+                "network_call_required": False})
+            atomic_json(cache, labels)
             return labels
         key = os.environ.get("ARK_API_KEY") or os.environ.get("API_KEY")
         if not key:
