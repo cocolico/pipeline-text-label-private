@@ -1,0 +1,406 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Stage 2h: post-cut QC -- hand presence + near/far depth classification per step segment.
+
+Runs after Stage 2 (video splitting) and before Stage 3 (text refinement). Reuses existing
+per-frame hand-detection output (`processed_hand/boxtrack_s3.json`) and per-frame refined
+depth chunks (`processed_refined_depth/refined_depth_*.npz`), both stored as sibling
+directories of the pipeline's output root at the camera-recording level. This stage does not
+call any model and does not gate Stage 3 -- it only annotates each step segment with a QC
+verdict; downstream consumers decide whether/how to filter on it.
+"""
+
+from __future__ import annotations
+
+import os
+import time
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
+
+from common import (
+    ensure_video_out_dir_safe,
+    format_duration,
+    guard_schema_fingerprint,
+    logger,
+    now_utc_iso,
+    read_json,
+    update_run_summary,
+    video_id_from_path,
+    write_json,
+)
+
+_DEPTH_CHUNK_CACHE_SIZE = 4
+
+
+def _can_resume_stage2h(qc_summary_path: str, segments_path: str) -> bool:
+    if not (os.path.exists(qc_summary_path) and os.path.exists(segments_path)):
+        return False
+    try:
+        qc = read_json(qc_summary_path)
+        steps = qc.get("steps", [])
+        segs = read_json(segments_path).get("segments", [])
+    except Exception:
+        return False
+    if not isinstance(steps, list) or not isinstance(segs, list) or not steps or not segs:
+        return False
+    if len(steps) != len(segs):
+        return False
+    return True
+
+
+def _camera_dir_for_video(video_path: str) -> str:
+    # Shared convention with output-root placement: <camera_dir>/raw_data/<video>.mp4,
+    # <camera_dir>/processed_text_label/, <camera_dir>/processed_hand/, <camera_dir>/processed_refined_depth/.
+    return os.path.dirname(os.path.dirname(os.path.abspath(video_path)))
+
+
+def _load_hand_frames(hand_dir: str) -> Optional[Dict[int, List[Dict[str, Any]]]]:
+    boxtrack_path = os.path.join(hand_dir, "boxtrack_s3.json")
+    if not os.path.isfile(boxtrack_path):
+        return None
+    try:
+        data = read_json(boxtrack_path)
+        frames = data.get("frames", [])
+        out: Dict[int, List[Dict[str, Any]]] = {}
+        for fr in frames:
+            if not isinstance(fr, dict):
+                continue
+            idx = fr.get("rgb_frame_index")
+            if idx is None:
+                continue
+            out[int(idx)] = fr.get("hands", []) or []
+        return out
+    except Exception as e:
+        logger.warning(f"[stage2h] Failed to load hand data from {boxtrack_path}: {type(e).__name__}: {e}")
+        return None
+
+
+def _build_depth_chunk_index(depth_dir: str, index_cache_path: str) -> Optional[List[Tuple[int, int, str]]]:
+    """Return [(chunk_start_frame, frame_count, npz_path), ...] sorted by chunk start, or None."""
+    if not os.path.isdir(depth_dir):
+        return None
+
+    npz_files = sorted(
+        f for f in os.listdir(depth_dir) if f.startswith("refined_depth_") and f.endswith(".npz")
+    )
+    if not npz_files:
+        return None
+
+    # Reuse a cached index if it matches the current file listing, so a resumed run doesn't
+    # re-decompress every chunk just to read its frame count again.
+    if os.path.exists(index_cache_path):
+        try:
+            cached = read_json(index_cache_path)
+            if cached.get("files") == npz_files:
+                chunks = cached.get("chunks", [])
+                return [(int(c["start"]), int(c["count"]), os.path.join(depth_dir, c["file"])) for c in chunks]
+        except Exception:
+            pass
+
+    manifest_counts: Dict[str, int] = {}
+    manifest_path = os.path.join(os.path.dirname(depth_dir), "raw_data", "manifest.json")
+    if os.path.isfile(manifest_path):
+        try:
+            manifest = read_json(manifest_path)
+            for chunk in manifest.get("aligned_depth_storage", {}).get("chunks", []) or []:
+                name = str(chunk.get("name", "")).replace("aligned_depth_", "refined_depth_")
+                if name and chunk.get("frame_count") is not None:
+                    manifest_counts[name] = int(chunk.get("frame_count"))
+        except Exception:
+            manifest_counts = {}
+
+    chunks: List[Tuple[int, int, str]] = []
+    cursor = 0
+    for fname in npz_files:
+        count = manifest_counts.get(fname)
+        if count is None:
+            try:
+                with np.load(os.path.join(depth_dir, fname)) as z:
+                    count = int(z["depth_refined"].shape[0])
+            except Exception as e:
+                logger.warning(f"[stage2h] Failed to read depth chunk {fname}: {type(e).__name__}: {e}")
+                return None
+        chunks.append((cursor, count, os.path.join(depth_dir, fname)))
+        cursor += count
+
+    try:
+        write_json(
+            index_cache_path,
+            {
+                "files": npz_files,
+                "chunks": [
+                    {"start": start, "count": count, "file": os.path.basename(path)}
+                    for start, count, path in chunks
+                ],
+            },
+        )
+    except Exception:
+        pass
+    return chunks
+
+
+class _DepthChunkReader:
+    """Loads refined_depth_*.npz chunks on demand, keeping only a few decompressed in memory."""
+
+    def __init__(self, chunks: List[Tuple[int, int, str]]):
+        self._chunks = chunks
+        self._cache: Dict[str, np.ndarray] = {}
+        self._order: List[str] = []
+
+    def _chunk_for_frame(self, frame_idx: int) -> Optional[Tuple[int, str]]:
+        for start, count, path in self._chunks:
+            if start <= frame_idx < start + count:
+                return frame_idx - start, path
+        return None
+
+    def frame_depth(self, frame_idx: int) -> Optional[np.ndarray]:
+        located = self._chunk_for_frame(frame_idx)
+        if located is None:
+            return None
+        local_idx, path = located
+        arr = self._cache.get(path)
+        if arr is None:
+            try:
+                with np.load(path) as z:
+                    arr = np.asarray(z["depth_refined"])
+            except Exception as e:
+                logger.warning(f"[stage2h] Failed to load depth chunk {path}: {type(e).__name__}: {e}")
+                return None
+            self._cache[path] = arr
+            self._order.append(path)
+            if len(self._order) > _DEPTH_CHUNK_CACHE_SIZE:
+                oldest = self._order.pop(0)
+                self._cache.pop(oldest, None)
+        if local_idx >= arr.shape[0]:
+            return None
+        return arr[local_idx]
+
+
+def _median_depth_in_bbox(depth_frame: np.ndarray, bbox_xyxy: List[float]) -> Optional[float]:
+    h, w = depth_frame.shape[:2]
+    x0, y0, x1, y1 = bbox_xyxy
+    xi0 = max(0, int(round(x0)))
+    yi0 = max(0, int(round(y0)))
+    xi1 = min(w, int(round(x1)))
+    yi1 = min(h, int(round(y1)))
+    if xi1 <= xi0 or yi1 <= yi0:
+        return None
+    region = depth_frame[yi0:yi1, xi0:xi1]
+    valid = region[region > 0]
+    if valid.size == 0:
+        return None
+    return float(np.median(valid))
+
+
+def _qc_one_segment(
+    seg: Dict[str, Any],
+    *,
+    hand_frames: Optional[Dict[int, List[Dict[str, Any]]]],
+    depth_reader: Optional[_DepthChunkReader],
+    frame_stride: int,
+    hand_score_threshold: float,
+    hand_presence_min_ratio: float,
+    near_far_threshold_mm: float,
+) -> Dict[str, Any]:
+    start = int(seg.get("start_frame_0based", 0))
+    end = int(seg.get("end_frame_0based_exclusive", start))
+    sample_frames = list(range(start, max(end, start + 1), max(1, int(frame_stride))))
+
+    result: Dict[str, Any] = {
+        "step_id": seg.get("step_id"),
+        "clip_relpath": seg.get("clip_relpath"),
+        "start_frame_0based": start,
+        "end_frame_0based_exclusive": end,
+        "sampled_frame_count": len(sample_frames),
+    }
+
+    if hand_frames is None:
+        result.update(
+            {
+                "hand_status": "unknown_no_hand_data",
+                "hand_present_frame_count": None,
+                "hand_presence_ratio": None,
+                "field_label": "unknown_no_hand_data",
+                "median_hand_depth_mm": None,
+                "near_frame_count": None,
+                "far_frame_count": None,
+            }
+        )
+        return result
+
+    present = 0
+    depths_mm: List[float] = []
+    for f_idx in sample_frames:
+        hands = hand_frames.get(f_idx, [])
+        confident = [
+            h for h in hands if isinstance(h, dict) and float(h.get("score", 0.0)) >= hand_score_threshold
+        ]
+        if not confident:
+            continue
+        present += 1
+        if depth_reader is None:
+            continue
+        depth_frame = depth_reader.frame_depth(f_idx)
+        if depth_frame is None:
+            continue
+        for h in confident:
+            bbox = h.get("bbox_xyxy")
+            if not bbox or len(bbox) != 4:
+                continue
+            d = _median_depth_in_bbox(depth_frame, bbox)
+            if d is not None:
+                depths_mm.append(d)
+
+    ratio = (present / len(sample_frames)) if sample_frames else 0.0
+    result["hand_present_frame_count"] = present
+    result["hand_presence_ratio"] = ratio
+    result["hand_status"] = "pass" if ratio >= hand_presence_min_ratio else "fail_no_hand"
+
+    if depth_reader is None:
+        result["field_label"] = "unknown_no_depth_data"
+        result["median_hand_depth_mm"] = None
+        result["near_frame_count"] = None
+        result["far_frame_count"] = None
+    elif not depths_mm:
+        result["field_label"] = "unknown"
+        result["median_hand_depth_mm"] = None
+        result["near_frame_count"] = 0
+        result["far_frame_count"] = 0
+    else:
+        near = sum(1 for d in depths_mm if d < near_far_threshold_mm)
+        far = len(depths_mm) - near
+        result["near_frame_count"] = near
+        result["far_frame_count"] = far
+        result["median_hand_depth_mm"] = float(np.median(depths_mm))
+        result["field_label"] = "near" if near >= far else "far"
+
+    return result
+
+
+def run_stage2h_for_video(
+    video_path: str,
+    output_root: str,
+    overwrite: bool,
+    *,
+    frame_stride: int = 3,
+    hand_score_threshold: float = 0.5,
+    hand_presence_min_ratio: float = 0.5,
+    near_far_threshold_mm: float = 700.0,
+    allow_legacy_resume: bool = False,
+) -> str:
+    t_start = time.perf_counter()
+    vid = video_id_from_path(video_path)
+    video_out = os.path.join(output_root, vid)
+    ensure_video_out_dir_safe(video_out, video_path)
+
+    stage2_dir = os.path.join(video_out, "stage2")
+    segments_path = os.path.join(stage2_dir, "step_segments.json")
+    stage2h_dir = os.path.join(video_out, "stage2h")
+    qc_summary_path = os.path.join(stage2h_dir, "qc_summary.json")
+    run_summary_path = os.path.join(video_out, "run_summary.json")
+
+    will_resume = not overwrite and _can_resume_stage2h(qc_summary_path, segments_path)
+    schema_fp = guard_schema_fingerprint(
+        run_summary_path,
+        video_out,
+        stage="Stage 2h",
+        overwrite=overwrite,
+        allow_legacy_resume=allow_legacy_resume,
+        will_resume=will_resume,
+    )
+    if will_resume:
+        logger.info(f"[stage2h] video_id={vid} resume: {os.path.relpath(video_out, output_root)}")
+        return video_out
+
+    if not os.path.exists(segments_path):
+        raise FileNotFoundError(f"Stage 2 segments not found: {segments_path}")
+
+    segments = read_json(segments_path).get("segments", [])
+    if not isinstance(segments, list) or not segments:
+        raise RuntimeError(f"Stage 2 segments file has no usable segments: {segments_path}")
+
+    logger.info(f"[stage2h] video_id={vid} start: overwrite={bool(overwrite)} steps={len(segments)}")
+
+    camera_dir = _camera_dir_for_video(video_path)
+    hand_dir = os.path.join(camera_dir, "processed_hand")
+    depth_dir = os.path.join(camera_dir, "processed_refined_depth")
+
+    hand_frames = _load_hand_frames(hand_dir)
+    if hand_frames is None:
+        logger.warning(
+            f"[stage2h] video_id={vid} no usable hand data under {hand_dir}; "
+            "hand_status will be 'unknown_no_hand_data' for all steps"
+        )
+
+    depth_chunks = _build_depth_chunk_index(depth_dir, os.path.join(stage2h_dir, "_depth_chunk_index.json"))
+    depth_reader = _DepthChunkReader(depth_chunks) if depth_chunks else None
+    if depth_reader is None:
+        logger.warning(
+            f"[stage2h] video_id={vid} no usable depth data under {depth_dir}; "
+            "field_label will be 'unknown_no_depth_data' for all steps"
+        )
+
+    step_results: List[Dict[str, Any]] = [
+        _qc_one_segment(
+            seg,
+            hand_frames=hand_frames,
+            depth_reader=depth_reader,
+            frame_stride=frame_stride,
+            hand_score_threshold=hand_score_threshold,
+            hand_presence_min_ratio=hand_presence_min_ratio,
+            near_far_threshold_mm=near_far_threshold_mm,
+        )
+        for seg in segments
+        if isinstance(seg, dict)
+    ]
+
+    num_hand_fail = sum(1 for r in step_results if r.get("hand_status") == "fail_no_hand")
+    num_near = sum(1 for r in step_results if r.get("field_label") == "near")
+    num_far = sum(1 for r in step_results if r.get("field_label") == "far")
+
+    write_json(
+        qc_summary_path,
+        {
+            "source_video": os.path.abspath(video_path),
+            "params": {
+                "frame_stride": int(frame_stride),
+                "hand_score_threshold": float(hand_score_threshold),
+                "hand_presence_min_ratio": float(hand_presence_min_ratio),
+                "near_far_threshold_mm": float(near_far_threshold_mm),
+            },
+            "hand_data_available": hand_frames is not None,
+            "depth_data_available": depth_reader is not None,
+            "steps": step_results,
+            "summary": {
+                "num_steps": len(step_results),
+                "num_hand_fail": num_hand_fail,
+                "num_near": num_near,
+                "num_far": num_far,
+            },
+        },
+    )
+
+    update_run_summary(
+        run_summary_path,
+        {
+            "schema_fingerprint": schema_fp,
+            "updated_at_utc": now_utc_iso(),
+            "stage2h": {
+                "status": "completed",
+                "qc_summary_path": os.path.relpath(qc_summary_path, video_out),
+                "num_steps": len(step_results),
+                "num_hand_fail": num_hand_fail,
+                "num_near": num_near,
+                "num_far": num_far,
+                "hand_data_available": hand_frames is not None,
+                "depth_data_available": depth_reader is not None,
+            },
+        },
+    )
+
+    logger.info(
+        f"[stage2h] video_id={vid} completed: steps={len(step_results)} hand_fail={num_hand_fail} "
+        f"near={num_near} far={num_far} elapsed={format_duration(time.perf_counter() - t_start)}"
+    )
+    return video_out

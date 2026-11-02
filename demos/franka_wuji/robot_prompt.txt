@@ -1,0 +1,49 @@
+Analyze the attached robot manipulation video. The subject is ONE dual-arm
+Franka robot equipped with left and right Wuji dexterous hands. The two arms
+belong to the same robot. Ignore background humans unless they intervene.
+Use robot-defined left/right, never screen-left/screen-right. If laterality
+cannot be determined reliably, use unknown_hand in relations and say so in
+the hand descriptions. Camera names do not establish robot laterality.
+Describe robot hands, not human skin, gloves, or human anatomy. Do not infer
+success, detachment, contact, force, or hidden objects without visual evidence.
+The supplied task is context only, not evidence that it was accomplished.
+
+Segment the clip into chronological meaningful phases of manipulation. Waiting
+or repositioning can be described when needed. Leave gaps for unclear periods;
+do not force complete coverage. Mark uncertain steps as uncertain. Use clip-local
+seconds and half-open intervals [start_sec, end_sec). Boundaries are approximate
+VLM observations, not verified frame-accurate labels. Keep simultaneous support
+by the other hand in the same step. Output English descriptions.
+
+Return one JSON object, no markdown, with exactly these keys:
+{
+  "high_level_goal": "Describe the actions actually observed.",
+  "steps": [
+    {
+      "step_id": 1,
+      "step_goal": "One meaningful manipulation phase.",
+      "start_sec": 0.0,
+      "end_sec": 1.0,
+      "evidence_status": "observed",
+      "action_semantics": {
+        "left_hand": "Observed action, not visible, or laterality uncertain.",
+        "right_hand": "Observed action, not visible, or laterality uncertain.",
+        "overall": "Observed coordinated action."
+      },
+      "object_inventory": [
+        {"entity_ref": "object_1", "canonical_name": "tomato truss"}
+      ],
+      "hand_object_relations": [
+        {"hand": "unknown_hand", "object": "tomato truss",
+         "relation": "holding", "entity_ref": "object_1"}
+      ]
+    }
+  ]
+}
+step_id must be consecutive from 1. Intervals must be ordered, non-overlapping,
+nonempty, and inside the supplied clip duration. evidence_status must be observed
+or uncertain. hand must be left_hand, right_hand, both_hands, or unknown_hand.
+Object references are STEP-LOCAL. Every relation must reference that step's
+inventory. Distinguish a tomato truss, detached tomatoes, stems and containers
+when the image supports it. Empty inventory/relations/steps are allowed when no
+reliable evidence exists. Do not produce bboxes, depths, or arm visibility labels.

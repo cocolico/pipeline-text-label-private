@@ -1,0 +1,33 @@
+tmp/
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+
+# Runtime logs, generated media, and pipeline outputs
+*.log
+*.mp4
+processed_text_label*/
+step_clips/
+
+# Accidental command-line argument files
+/--host
+/--port
+/--video
+
+# Private development copy: machine-local state and secrets
+.venv*/
+.env
+.env.*
+!.env.example
+annotation_runs/
+resource_monitor_logs/
+*.tmp

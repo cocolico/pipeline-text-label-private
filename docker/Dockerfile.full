@@ -1,0 +1,25 @@
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.12 \
+    python3-pip \
+    ffmpeg \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY docker/requirements.txt .
+RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
+
+# Code baked into the image (unlike docker/Dockerfile, which mounts it at run time).
+COPY api/api_seed_openai_easy_no_short_step/ /app/pipeline/
+
+# No secrets are baked into this image. The pipeline reads credentials/config from
+# environment variables at container start (see common.py: ApiConfig) - pass them with
+# `docker run -e ARK_API_KEY=... -e API_BASE_URL=... -e MODEL_NAME=...` or --env-file.
+# Required: ARK_API_KEY (or API_KEY). Optional: API_BASE_URL, MODEL_NAME,
+# ARK_REASONING_EFFORT, MAX_TOKENS, TEMPERATURE, VIDEO_UNDERSTANDING_FPS.
+
+ENTRYPOINT ["python3", "/app/pipeline/pipeline.py"]

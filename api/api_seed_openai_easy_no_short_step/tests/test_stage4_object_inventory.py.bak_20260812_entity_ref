@@ -1,0 +1,235 @@
+from __future__ import annotations
+
+import importlib.util
+import sys
+import types
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _load_stage4():
+    common = types.ModuleType("common")
+    for name in (
+        "add_api_cli_args",
+        "add_sampling_cli_args",
+        "api_config_from_args",
+        "build_video_api_content",
+        "build_retry_prefix",
+        "build_source_video_meta",
+        "can_open_video",
+        "call_chat_completion",
+        "collect_videos",
+        "cut_video_segment_ffmpeg",
+        "default_output_root",
+        "ensure_frame_index_fps",
+        "ensure_video_out_dir_safe",
+        "extract_json_from_response",
+        "format_duration",
+        "get_video_metadata",
+        "initialize_api_client",
+        "guard_schema_fingerprint",
+        "now_utc_iso",
+        "read_json",
+        "sample_video_to_frame_index",
+        "sampling_config_from_args",
+        "sanitize_filename",
+        "stage4_atomic_clip_relpath",
+        "update_run_summary",
+        "video_id_from_path",
+        "write_frame_manifest",
+        "write_json",
+        "write_text",
+    ):
+        setattr(common, name, lambda *args, **kwargs: None)
+    common.VIDEO_EXTS = (".mp4", ".m4v", ".avi", ".mov", ".mkv", ".webm")
+    common.logger = types.SimpleNamespace(
+        info=lambda *args, **kwargs: None,
+        warning=lambda *args, **kwargs: None,
+    )
+    sys.modules["common"] = common
+
+    spec = importlib.util.spec_from_file_location(
+        "stage4_object_inventory_test_target", ROOT / "stage4_atomic_actions.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+M = _load_stage4()
+
+
+def relation(object_name, hand="right hand", rel="grasp"):
+    return {"object": object_name, "hand": hand, "relation": rel}
+
+
+def action(patient, actor="right_hand", act="move", caption="The hand moves the object."):
+    return {"actor": actor, "action": act, "patient": patient, "caption": caption}
+
+
+class CollectObjectMentionsTests(unittest.TestCase):
+    def test_dedup_across_steps_and_fields(self):
+        final_steps = [
+            {
+                "step_id": 1,
+                "hand_object_relations": [relation("cup"), relation("plate")],
+                "atomic_actions": [action("cup")],
+            },
+            {
+                "step_id": 2,
+                "hand_object_relations": [relation("cup")],
+                "atomic_actions": [action("plate"), action("cup")],
+            },
+        ]
+        mentions = M._collect_object_mentions(final_steps)
+        self.assertEqual(mentions, ["cup", "plate"])
+
+    def test_colon_multi_entity_patient_is_split(self):
+        final_steps = [
+            {
+                "step_id": 1,
+                "hand_object_relations": [],
+                "atomic_actions": [action("cup:saucer")],
+            }
+        ]
+        mentions = M._collect_object_mentions(final_steps)
+        self.assertEqual(mentions, ["cup", "saucer"])
+
+    def test_empty_when_no_mentions(self):
+        final_steps = [{"step_id": 1, "hand_object_relations": [], "atomic_actions": []}]
+        self.assertEqual(M._collect_object_mentions(final_steps), [])
+
+
+class ValidateObjectInventoryTests(unittest.TestCase):
+    def _valid_response(self):
+        return {
+            "object_inventory": [
+                {"entity_ref": "obj_cup", "canonical_name": "cup", "identity_scope": "instance"},
+                {"entity_ref": "obj_plate", "canonical_name": "plate", "identity_scope": "instance"},
+            ],
+            "mentions": {"cup": "obj_cup", "plate": "obj_plate"},
+        }
+
+    def test_accepts_valid_response(self):
+        inventory, mention_to_ref, errors = M.validate_object_inventory(
+            self._valid_response(), ["cup", "plate"]
+        )
+        self.assertEqual(errors, [])
+        self.assertIsNotNone(inventory)
+        self.assertEqual(mention_to_ref, {"cup": "obj_cup", "plate": "obj_plate"})
+
+    def test_rejects_duplicate_entity_ref(self):
+        resp = self._valid_response()
+        resp["object_inventory"].append(
+            {"entity_ref": "obj_cup", "canonical_name": "another cup", "identity_scope": "instance"}
+        )
+        inventory, mention_to_ref, errors = M.validate_object_inventory(resp, ["cup", "plate"])
+        self.assertIsNone(inventory)
+        self.assertIsNone(mention_to_ref)
+        self.assertTrue(any("duplicate" in e.lower() for e in errors))
+
+    def test_rejects_missing_mention_coverage(self):
+        resp = self._valid_response()
+        del resp["mentions"]["plate"]
+        inventory, mention_to_ref, errors = M.validate_object_inventory(resp, ["cup", "plate"])
+        self.assertIsNone(inventory)
+        self.assertIsNone(mention_to_ref)
+        self.assertTrue(any("missing" in e.lower() for e in errors))
+
+    def test_rejects_invalid_identity_scope(self):
+        resp = self._valid_response()
+        resp["object_inventory"][0]["identity_scope"] = "maybe"
+        inventory, mention_to_ref, errors = M.validate_object_inventory(resp, ["cup", "plate"])
+        self.assertIsNone(inventory)
+        self.assertIsNone(mention_to_ref)
+        self.assertTrue(any("identity_scope" in e for e in errors))
+
+    def test_rejects_mention_mapped_to_unknown_entity_ref(self):
+        resp = self._valid_response()
+        resp["mentions"]["cup"] = "obj_does_not_exist"
+        inventory, mention_to_ref, errors = M.validate_object_inventory(resp, ["cup", "plate"])
+        self.assertIsNone(inventory)
+        self.assertIsNone(mention_to_ref)
+        self.assertTrue(any("not found" in e.lower() for e in errors))
+
+
+class ApplyEntityRefsTests(unittest.TestCase):
+    def test_injects_entity_ref_without_altering_text_fields(self):
+        final_steps = [
+            {
+                "step_id": 1,
+                "hand_object_relations": [relation("cup")],
+                "atomic_actions": [action("cup")],
+            }
+        ]
+        mention_to_ref = {"cup": "obj_cup"}
+        M._apply_entity_refs(final_steps, mention_to_ref)
+
+        rel = final_steps[0]["hand_object_relations"][0]
+        act = final_steps[0]["atomic_actions"][0]
+        self.assertEqual(rel["object"], "cup")
+        self.assertEqual(rel["entity_ref"], "obj_cup")
+        self.assertEqual(act["patient"], "cup")
+        self.assertEqual(act["entity_ref"], "obj_cup")
+
+    def test_colon_multi_entity_patient_gets_colon_joined_entity_ref(self):
+        final_steps = [
+            {
+                "step_id": 1,
+                "hand_object_relations": [],
+                "atomic_actions": [action("cup:saucer")],
+            }
+        ]
+        mention_to_ref = {"cup": "obj_cup", "saucer": "obj_saucer"}
+        M._apply_entity_refs(final_steps, mention_to_ref)
+
+        act = final_steps[0]["atomic_actions"][0]
+        self.assertEqual(act["patient"], "cup:saucer")
+        self.assertEqual(act["entity_ref"], "obj_cup:obj_saucer")
+
+    def test_stable_entity_ref_across_steps_despite_text_variation(self):
+        final_steps = [
+            {
+                "step_id": 1,
+                "hand_object_relations": [relation("vertical support wooden block")],
+                "atomic_actions": [],
+            },
+            {
+                "step_id": 3,
+                "hand_object_relations": [],
+                "atomic_actions": [action("scattered_loose_wooden_blocks")],
+            },
+        ]
+        mention_to_ref = {
+            "vertical support wooden block": "obj_wooden_blocks",
+            "scattered_loose_wooden_blocks": "obj_wooden_blocks",
+        }
+        M._apply_entity_refs(final_steps, mention_to_ref)
+
+        self.assertEqual(
+            final_steps[0]["hand_object_relations"][0]["entity_ref"], "obj_wooden_blocks"
+        )
+        self.assertEqual(final_steps[1]["atomic_actions"][0]["entity_ref"], "obj_wooden_blocks")
+
+    def test_missing_mapping_leaves_no_entity_ref(self):
+        final_steps = [
+            {
+                "step_id": 1,
+                "hand_object_relations": [relation("mystery_item")],
+                "atomic_actions": [action("mystery_item")],
+            }
+        ]
+        M._apply_entity_refs(final_steps, {})
+
+        rel = final_steps[0]["hand_object_relations"][0]
+        act = final_steps[0]["atomic_actions"][0]
+        self.assertNotIn("entity_ref", rel)
+        self.assertNotIn("entity_ref", act)
+
+
+if __name__ == "__main__":
+    unittest.main()

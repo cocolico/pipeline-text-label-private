@@ -1,0 +1,1159 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import time
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
+from common import (
+    add_api_cli_args,
+    VIDEO_EXTS,
+    api_config_from_args,
+    build_source_video_meta,
+    build_video_api_content,
+    build_retry_prefix,
+    can_open_video,
+    call_chat_completion,
+    collect_videos,
+    cut_video_segment_ffmpeg,
+    default_output_root,
+    estimate_min_positive_delta_sec,
+    ensure_video_out_dir_safe,
+    extract_json_from_response,
+    format_duration,
+    initialize_api_client,
+    guard_schema_fingerprint,
+    logger,
+    load_frames_from_manifest,
+    now_utc_iso,
+    read_json,
+    sanitize_filename,
+    stage2_step_clip_relpath,
+    update_run_summary,
+    validate_stage2_localization,
+    video_id_from_path,
+    write_json,
+    write_text,
+)
+from prompts import build_stage2_user_prompt, build_stage2_boundary_verification_prompt
+from hand_step_pipeline import run_stage2_text_only
+
+if TYPE_CHECKING:
+    from common import ApiConfig
+
+MIN_STANDALONE_STEP_DURATION_SEC = 2.0
+# Source videos shorter than this are NOT split into multiple steps; the entire
+# video is treated as a single complete step and Stage 2's VLM localization /
+# boundary-verification calls are skipped entirely.
+SHORT_VIDEO_SINGLE_STEP_THRESHOLD_SEC = 15.0
+
+
+def _adjust_end_sec_if_needed(
+    *,
+    step_id: int,
+    start_sec: float,
+    end_sec: float,
+    min_delta_sec: float,
+    next_step_start_sec: Optional[float],
+    timestamps: List[float],
+    end_index_1based: int,
+) -> float:
+    if end_sec > start_sec:
+        return end_sec
+
+    raw_start = float(start_sec)
+    raw_end = float(end_sec)
+
+    # If the next step begins later, we can allocate a small, non-overlapping duration window.
+    if next_step_start_sec is not None and float(next_step_start_sec) > raw_start:
+        budget = float(next_step_start_sec) - raw_start
+        eps = min(max(min_delta_sec, 0.05), budget * 0.9)
+        adjusted = raw_start + eps
+        logger.warning(
+            f"[stage2] Adjusted non-positive duration for step_id={step_id}: "
+            f"start={raw_start:.3f}, end={raw_end:.3f} -> end={adjusted:.3f} (budget to next step={budget:.3f})"
+        )
+        return adjusted
+
+    # Fallback: search for the next strictly larger timestamp after the provided end boundary.
+    for t in (timestamps or [])[max(0, int(end_index_1based) - 1) :]:
+        tt = float(t)
+        if tt > raw_start:
+            logger.warning(
+                f"[stage2] Adjusted non-positive duration for step_id={step_id}: "
+                f"start={raw_start:.3f}, end={raw_end:.3f} -> end={tt:.3f} (next available timestamp)"
+            )
+            return tt
+
+    # Last resort: extend by epsilon.
+    adjusted = raw_start + max(min_delta_sec, 0.1)
+    logger.warning(
+        f"[stage2] Adjusted non-positive duration for step_id={step_id}: "
+        f"start={raw_start:.3f}, end={raw_end:.3f} -> end={adjusted:.3f} (epsilon fallback)"
+    )
+    return adjusted
+
+
+def _extract_step_goals_by_id(items: Any) -> Dict[int, str]:
+    """Parse a list of step-like dicts into {step_id: step_goal}."""
+    out: Dict[int, str] = {}
+    if not isinstance(items, list):
+        return out
+    for obj in items:
+        if not isinstance(obj, dict) or obj.get("step_id") is None:
+            continue
+        try:
+            sid = int(obj.get("step_id"))
+        except Exception:
+            continue
+        goal = str(obj.get("step_goal", "")).strip()
+        if sid > 0 and goal:
+            out[sid] = goal
+    return out
+
+
+def _draft_steps_signature(draft_plan: Dict[str, Any]) -> Tuple[Tuple[int, str], ...]:
+    steps = draft_plan.get("steps", [])
+    if not isinstance(steps, list):
+        return tuple()
+    out: List[Tuple[int, str]] = []
+    for st in steps:
+        if not isinstance(st, dict):
+            continue
+        try:
+            sid = int(st.get("step_id", 0))
+        except Exception:
+            continue
+        out.append((sid, str(st.get("step_goal", "")).strip()))
+    return tuple(out)
+
+
+def _build_draft_plan_outline(ordered_steps: List[Dict[str, Any]]) -> str:
+    outline_lines: List[str] = []
+    for st in ordered_steps:
+        try:
+            sid = int(st.get("step_id", 0))
+        except Exception:
+            continue
+        goal = str(st.get("step_goal", "")).strip()
+        if sid > 0 and goal:
+            outline_lines.append(f"- Step {sid}: {goal}")
+    return "\n".join(outline_lines)
+
+
+def _merged_step_goal(steps: List[Dict[str, Any]]) -> str:
+    goals: List[str] = []
+    for st in steps:
+        goal = str(st.get("step_goal", "")).strip()
+        if goal:
+            goals.append(goal.rstrip("."))
+    return "; then ".join(goals).strip() or "Merged adjacent short steps into one coherent step"
+
+
+def _merge_no_short_step_candidates(
+    ordered_steps: List[Dict[str, Any]],
+    loc_by_id: Dict[int, Dict[str, int]],
+    num_frames: int,
+    timestamps: List[float],
+) -> Tuple[Optional[List[Dict[str, Any]]], Optional[Dict[str, Any]], List[str]]:
+    if len(ordered_steps) <= 1:
+        return None, None, []
+
+    groups: List[Dict[str, Any]] = []
+    for st in ordered_steps:
+        try:
+            sid = int(st.get("step_id", 0))
+            loc = loc_by_id[sid]
+        except Exception:
+            continue
+        if sid <= 0:
+            continue
+        groups.append(
+            {
+                "steps": [st],
+                "start": int(loc["start_frame_index"]),
+                "end": int(loc["end_frame_index"]),
+                "original_ids": [sid],
+            }
+        )
+
+    if len(groups) <= 1:
+        return None, None, []
+
+    min_span = _required_no_short_index_span(timestamps)
+    total_span = int(num_frames)
+
+    def span(g: Dict[str, Any]) -> int:
+        return int(g["end"]) - int(g["start"])
+
+    def merge_pair(idx: int) -> None:
+        left = groups[idx]
+        right = groups[idx + 1]
+        groups[idx] = {
+            "steps": list(left["steps"]) + list(right["steps"]),
+            "start": int(left["start"]),
+            "end": int(right["end"]),
+            "original_ids": list(left["original_ids"]) + list(right["original_ids"]),
+        }
+        del groups[idx + 1]
+
+    changes: List[str] = []
+    while len(groups) > 1 and (
+        any(span(g) < min_span for g in groups) or min_span * len(groups) > total_span
+    ):
+        short_idxs = [i for i, g in enumerate(groups) if span(g) < min_span]
+        if short_idxs:
+            i = min(short_idxs, key=lambda idx: (span(groups[idx]), idx))
+            if i == 0:
+                pair_idx = 0
+            elif i == len(groups) - 1:
+                pair_idx = i - 1
+            else:
+                left_span = span(groups[i - 1]) + span(groups[i])
+                right_span = span(groups[i]) + span(groups[i + 1])
+                pair_idx = i - 1 if left_span <= right_span else i
+        else:
+            pair_idx = min(
+                range(len(groups) - 1),
+                key=lambda idx: (span(groups[idx]) + span(groups[idx + 1]), idx),
+            )
+        merged_ids = list(groups[pair_idx]["original_ids"]) + list(groups[pair_idx + 1]["original_ids"])
+        changes.append("merged original step_ids " + "+".join(str(x) for x in merged_ids))
+        merge_pair(pair_idx)
+
+    if len(groups) > 1 and any(span(g) < min_span for g in groups):
+        return None, None, [
+            "cannot merge no-short-step boundaries into durations > "
+            f"{MIN_STANDALONE_STEP_DURATION_SEC:.1f}s"
+        ]
+
+    merged_steps: List[Dict[str, Any]] = []
+    loc_steps: List[Dict[str, int]] = []
+    for new_sid, g in enumerate(groups, start=1):
+        merged_step = dict(g["steps"][0])
+        merged_step["step_id"] = int(new_sid)
+        merged_step["step_goal"] = _merged_step_goal(list(g["steps"]))
+        merged_steps.append(merged_step)
+        loc_steps.append(
+            {
+                "step_id": int(new_sid),
+                "start_frame_index": int(g["start"]),
+                "end_frame_index": int(g["end"]),
+            }
+        )
+
+    return merged_steps, {"steps": loc_steps}, changes
+
+
+def _no_short_step_duration_errors(
+    ordered_steps: List[Dict[str, Any]],
+    loc_by_id: Dict[int, Dict[str, int]],
+    num_frames: int,
+    timestamps: List[float],
+) -> List[str]:
+    if len(ordered_steps) <= 1:
+        return []
+    min_delta_sec = estimate_min_positive_delta_sec(timestamps)
+    errors: List[str] = []
+    for st in ordered_steps:
+        try:
+            sid = int(st.get("step_id", 0))
+            loc = loc_by_id[sid]
+            sidx = int(loc["start_frame_index"])
+            eidx = int(loc["end_frame_index"])
+            start_sec = float(timestamps[sidx - 1])
+            if eidx == int(num_frames) + 1:
+                end_sec = float(timestamps[-1]) + float(min_delta_sec)
+            else:
+                end_sec = float(timestamps[eidx - 1])
+        except Exception:
+            continue
+        duration = float(end_sec) - float(start_sec)
+        if duration <= MIN_STANDALONE_STEP_DURATION_SEC:
+            errors.append(
+                f"step_id={sid} duration is {duration:.3f}s, which is <= "
+                f"{MIN_STANDALONE_STEP_DURATION_SEC:.1f}s. For no_short_step runs, do not make "
+                "very brief intention/transition actions standalone steps; expand or merge the boundary into an adjacent coherent step."
+            )
+    return errors
+
+
+def _required_no_short_index_span(timestamps: List[float]) -> int:
+    min_delta_sec = max(float(estimate_min_positive_delta_sec(timestamps)), 1e-6)
+    span = 1
+    while float(span) * min_delta_sec <= MIN_STANDALONE_STEP_DURATION_SEC + 1e-9:
+        span += 1
+    return max(1, span)
+
+
+def _repair_no_short_step_boundaries(
+    ordered_steps: List[Dict[str, Any]],
+    loc_by_id: Dict[int, Dict[str, int]],
+    num_frames: int,
+    timestamps: List[float],
+) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+    if len(ordered_steps) <= 1:
+        return None, []
+
+    step_ids: List[int] = []
+    for st in ordered_steps:
+        try:
+            sid = int(st.get("step_id", 0))
+        except Exception:
+            continue
+        if sid > 0:
+            step_ids.append(sid)
+    if not step_ids or any(sid not in loc_by_id for sid in step_ids):
+        return None, []
+
+    min_span = _required_no_short_index_span(timestamps)
+    total_span = int(num_frames)
+    if min_span * len(step_ids) > total_span:
+        return None, [
+            f"cannot repair no-short-step boundaries: {len(step_ids)} steps need at least "
+            f"{min_span * len(step_ids)} frame-index intervals, but video has {total_span}."
+        ]
+
+    old_bounds = [int(loc_by_id[step_ids[0]]["start_frame_index"])]
+    for sid in step_ids:
+        old_bounds.append(int(loc_by_id[sid]["end_frame_index"]))
+
+    new_bounds: List[int] = [1]
+    for k in range(1, len(step_ids)):
+        low = max(new_bounds[-1] + min_span, 1 + k * min_span)
+        high = int(num_frames) + 1 - (len(step_ids) - k) * min_span
+        if low > high:
+            return None, [
+                f"cannot repair no-short-step boundary {k}: feasible range is empty ({low}>{high})."
+            ]
+        target = old_bounds[k] if k < len(old_bounds) else low
+        new_bounds.append(min(max(int(target), int(low)), int(high)))
+    new_bounds.append(int(num_frames) + 1)
+
+    changes: List[str] = []
+    for k, (old, new) in enumerate(zip(old_bounds, new_bounds)):
+        if int(old) != int(new):
+            label = "start" if k == 0 else ("end" if k == len(step_ids) else f"boundary_after_step_{step_ids[k - 1]}")
+            changes.append(f"{label}: {old}->{new}")
+    if not changes:
+        return None, []
+
+    repaired_steps: List[Dict[str, int]] = []
+    for i, sid in enumerate(step_ids):
+        repaired_steps.append(
+            {
+                "step_id": int(sid),
+                "start_frame_index": int(new_bounds[i]),
+                "end_frame_index": int(new_bounds[i + 1]),
+            }
+        )
+    return {"steps": repaired_steps}, changes
+
+
+def _validate_or_repair_no_short_steps(
+    *,
+    draft_plan: Dict[str, Any],
+    ordered_steps: List[Dict[str, Any]],
+    localization: Dict[str, Any],
+    loc_by_id: Dict[int, Dict[str, int]],
+    num_frames: int,
+    timestamps: List[float],
+    context: str,
+) -> Tuple[bool, List[str], Dict[str, Any], Dict[int, Dict[str, int]]]:
+    short_errors = _no_short_step_duration_errors(ordered_steps, loc_by_id, num_frames, timestamps)
+    if not short_errors:
+        return True, [], localization, loc_by_id
+
+    repaired_loc, repair_changes = _repair_no_short_step_boundaries(
+        ordered_steps, loc_by_id, num_frames, timestamps
+    )
+    if repaired_loc is None:
+        merged_steps, merged_loc, merge_changes = _merge_no_short_step_candidates(
+            ordered_steps, loc_by_id, num_frames, timestamps
+        )
+        if merged_steps is not None and merged_loc is not None:
+            candidate_draft = dict(draft_plan)
+            candidate_draft["steps"] = merged_steps
+            m_ok, m_errors, m_by_id = validate_stage2_localization(
+                candidate_draft, merged_loc, num_frames, frame_timestamps=timestamps
+            )
+            if m_ok:
+                m_short_errors = _no_short_step_duration_errors(merged_steps, m_by_id, num_frames, timestamps)
+                if not m_short_errors:
+                    draft_plan["steps"] = merged_steps
+                    ordered_steps[:] = merged_steps
+                    logger.warning(
+                        f"[stage2] {context} auto-merged adjacent no-short-step boundaries: "
+                        + "; ".join(merge_changes)
+                    )
+                    return True, [], merged_loc, m_by_id
+                m_errors = m_short_errors
+            return False, short_errors + repair_changes + [f"auto-merge failed: {e}" for e in m_errors[:5]], localization, loc_by_id
+        return False, short_errors + repair_changes + merge_changes, localization, loc_by_id
+
+    r_ok, r_errors, r_by_id = validate_stage2_localization(
+        draft_plan, repaired_loc, num_frames, frame_timestamps=timestamps
+    )
+    if r_ok:
+        r_short_errors = _no_short_step_duration_errors(ordered_steps, r_by_id, num_frames, timestamps)
+        if not r_short_errors:
+            logger.warning(
+                f"[stage2] {context} auto-repaired no-short-step boundaries: "
+                + "; ".join(repair_changes)
+            )
+            return True, [], repaired_loc, r_by_id
+        r_errors = r_short_errors
+    return False, short_errors + [f"auto-repair failed: {e}" for e in r_errors[:5]], localization, loc_by_id
+
+
+def _can_resume_stage2(segments_path: str, draft_path: str, stage2_dir: str) -> bool:
+    """Return True if cached Stage-2 segments and clips match the current Stage-1 draft."""
+    if not (os.path.exists(segments_path) and os.path.exists(draft_path)):
+        return False
+    try:
+        segments_data = read_json(segments_path)
+        segs = segments_data.get("segments", [])
+        if not isinstance(segs, list) or not segs:
+            return False
+        draft = read_json(draft_path)
+    except Exception:
+        return False
+
+    # Ensure the cached segments were produced from the same Stage-1 frame pool.
+    try:
+        video_out = os.path.dirname(stage2_dir)
+        manifest_path = os.path.join(video_out, "stage1", "frame_manifest.json")
+        manifest = read_json(manifest_path)
+        seg_num = int(segments_data.get("num_frames", -1))
+        man_num = int(manifest.get("num_frames", -1))
+        if seg_num <= 0 or man_num <= 0 or seg_num != man_num:
+            return False
+        frames = manifest.get("frames", [])
+        if not isinstance(frames, list) or len(frames) != man_num:
+            return False
+        ts_list = [float(fr.get("timestamp_sec", 0.0)) if isinstance(fr, dict) else 0.0 for fr in frames]
+    except Exception:
+        return False
+
+    expected = _extract_step_goals_by_id(draft.get("steps", []))
+    got = _extract_step_goals_by_id(segs)
+    if not expected or expected != got:
+        return False
+    loc_path = os.path.join(stage2_dir, "localization_raw.json")
+    if os.path.exists(loc_path) and any(
+        isinstance(seg, dict) and ("start_frame_index" in seg or "end_frame_index" in seg)
+        for seg in segs
+    ):
+        return False
+
+    # Ensure the cached model localization still satisfies strict Stage-2 prompt constraints.
+    # Public step_segments.json intentionally exposes only original-video 0-based frame
+    # fields, so prefer localization_raw.json for the internal dense boundary indices.
+    try:
+        if os.path.exists(loc_path):
+            loc_obj = read_json(loc_path)
+        else:
+            # Backward compatibility with older cached outputs that stored the
+            # internal dense boundary indices directly inside step_segments.json.
+            seg_by_id = {int(seg.get("step_id")): seg for seg in segs if isinstance(seg, dict) and seg.get("step_id") is not None}
+            loc_steps: List[Dict[str, int]] = []
+            for sid in sorted(expected):
+                seg = seg_by_id.get(int(sid))
+                if not isinstance(seg, dict):
+                    return False
+                loc_steps.append(
+                    {
+                        "step_id": int(sid),
+                        "start_frame_index": int(seg.get("start_frame_index")),
+                        "end_frame_index": int(seg.get("end_frame_index")),
+                    }
+                )
+            loc_obj = {"steps": loc_steps}
+        ok, _errors, _by_id = validate_stage2_localization(
+            draft, loc_obj, man_num, frame_timestamps=ts_list
+        )
+        if not ok:
+            return False
+    except Exception:
+        return False
+
+    for seg in segs:
+        if not isinstance(seg, dict):
+            return False
+        rel = seg.get("clip_relpath")
+        if not rel:
+            return False
+        clip_abs = os.path.join(stage2_dir, rel)
+        if not os.path.exists(clip_abs) or os.path.getsize(clip_abs) <= 0:
+            return False
+        if not can_open_video(clip_abs):
+            return False
+    return True
+
+
+def run_stage2_for_video(
+    video_path: str,
+    output_root: str,
+    api_cfg: ApiConfig,
+    ffmpeg_bin: str,
+    overwrite: bool,
+    max_retries: int,
+    *,
+    cut_mode: str = "reencode",
+    seek_slop_sec: float = 1.0,
+    crf: int = 18,
+    preset: str = "veryfast",
+    keep_audio: bool = False,
+    allow_legacy_resume: bool = False,
+) -> str:
+    # New default contract: Stage 2 is text-only. It fuses the independent
+    # Stage-1 VLM events with upstream frame/bbox evidence and never invokes
+    # ffmpeg or materializes per-step video clips. The legacy implementation is
+    # intentionally retained below for schema/reference compatibility, but is
+    # unreachable from the public entry point.
+    return run_stage2_text_only(
+        video_path=video_path,
+        output_root=output_root,
+        overwrite=overwrite,
+        api_cfg=api_cfg,
+        max_retries=max_retries,
+    )
+
+    t_start = time.perf_counter()
+    vid = video_id_from_path(video_path)
+    video_out = os.path.join(output_root, vid)
+    ensure_video_out_dir_safe(video_out, video_path)
+    stage1_dir = os.path.join(video_out, "stage1")
+    stage2_dir = os.path.join(video_out, "stage2")
+    manifest_path = os.path.join(stage1_dir, "frame_manifest.json")
+    draft_path = os.path.join(stage1_dir, "draft_plan.json")
+    raw_path = os.path.join(stage2_dir, "stage2_raw_response.txt")
+    loc_path = os.path.join(stage2_dir, "localization_raw.json")
+    segments_path = os.path.join(stage2_dir, "step_segments.json")
+    clips_dir = os.path.join(stage2_dir, "step_clips")
+    sys_prompt_path = os.path.join(stage2_dir, "stage2_system_prompt.txt")
+    user_prompt_path = os.path.join(stage2_dir, "stage2_user_prompt.txt")
+    run_summary_path = os.path.join(video_out, "run_summary.json")
+
+    will_resume = not overwrite and _can_resume_stage2(segments_path, draft_path, stage2_dir)
+    schema_fp = guard_schema_fingerprint(
+        run_summary_path,
+        video_out,
+        stage="Stage 2",
+        overwrite=overwrite,
+        allow_legacy_resume=allow_legacy_resume,
+        will_resume=will_resume,
+    )
+    if will_resume:
+        logger.info(f"[stage2] video_id={vid} resume: {os.path.relpath(video_out, output_root)}")
+        return video_out
+
+    logger.info(
+        f"[stage2] video_id={vid} start: overwrite={bool(overwrite)} cut_mode={cut_mode} "
+        f"src={os.path.abspath(video_path)}"
+    )
+
+    # Fail fast before any model call.
+    if shutil.which(ffmpeg_bin) is None:
+        raise FileNotFoundError(
+            f"ffmpeg binary not found: '{ffmpeg_bin}'. Install ffmpeg or pass a valid path via --ffmpeg-bin."
+        )
+
+    if not os.path.exists(draft_path):
+        raise FileNotFoundError(f"Stage 1 draft not found: {draft_path}")
+    if not os.path.exists(manifest_path):
+        raise FileNotFoundError(f"Stage 1 manifest not found: {manifest_path}")
+
+    draft_plan = read_json(draft_path)
+    initial_draft_steps_signature = _draft_steps_signature(draft_plan)
+    high_level_goal = str(draft_plan.get("high_level_goal", "")).strip()
+    steps_for_count = draft_plan.get("steps", [])
+    if not isinstance(steps_for_count, list) or not steps_for_count:
+        raise RuntimeError("Draft plan has no steps.")
+
+    steps = draft_plan.get("steps", [])
+    ordered_steps = sorted([s for s in steps if isinstance(s, dict)], key=lambda x: int(x.get("step_id", 0)))
+    draft_plan_outline = _build_draft_plan_outline(ordered_steps)
+
+    frames = load_frames_from_manifest(manifest_path)
+    num_frames = len(frames)
+    ts_list = [float(fr.get("timestamp_sec", 0.0)) for fr in frames]
+    logger.info(f"[stage2] video_id={vid} draft_steps={len(ordered_steps)} stage1_frames={num_frames}")
+
+    # Short-video short-circuit: source videos under SHORT_VIDEO_SINGLE_STEP_THRESHOLD_SEC
+    # are NOT split into multiple steps. Collapse the draft plan into a single step and
+    # skip the VLM localization / boundary-verification calls entirely.
+    early_manifest = read_json(manifest_path)
+    early_source_duration_sec = float(early_manifest.get("source_video_duration_sec", 0.0) or 0.0)
+    short_video_single_step = (
+        0.0 < early_source_duration_sec < SHORT_VIDEO_SINGLE_STEP_THRESHOLD_SEC
+    )
+    if short_video_single_step and len(ordered_steps) > 1:
+        os.makedirs(stage2_dir, exist_ok=True)
+        backup_draft_path = os.path.join(stage2_dir, "draft_plan_before_no_short_merge.json")
+        if not os.path.exists(backup_draft_path):
+            try:
+                write_json(backup_draft_path, read_json(draft_path))
+            except Exception:
+                pass
+        merged_goal = " ".join(
+            str(s.get("step_goal", "")).strip()
+            for s in ordered_steps
+            if str(s.get("step_goal", "")).strip()
+        ).strip() or high_level_goal
+        draft_plan["steps"] = [{"step_id": 1, "step_goal": merged_goal}]
+        write_json(draft_path, draft_plan)
+        ordered_steps = sorted(
+            [s for s in draft_plan["steps"] if isinstance(s, dict)],
+            key=lambda x: int(x.get("step_id", 0)),
+        )
+        logger.info(
+            f"[stage2] video_id={vid} source_video_duration_sec={early_source_duration_sec:.2f} < "
+            f"{SHORT_VIDEO_SINGLE_STEP_THRESHOLD_SEC}s; collapsed draft plan to a single step, "
+            "skipping VLM localization."
+        )
+    draft_plan_outline = _build_draft_plan_outline(ordered_steps)
+
+    base_prompt = build_stage2_user_prompt(high_level_goal, draft_plan_outline, num_frames)
+    system_text = "You are an expert video step temporal localization assistant. Return strict JSON only (no markdown, no extra text)."
+
+    last_content = ""
+    last_errors: List[str] = []
+    localization: Optional[Dict[str, Any]] = None
+    loc_by_id: Dict[int, Dict[str, int]] = {}
+    localization_from_cache = False
+    cached_loc_mtime: Optional[float] = None
+    stage_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "api_calls": 0}
+    if short_video_single_step:
+        synthetic_loc = {
+            "steps": [
+                {
+                    "step_id": int(ordered_steps[0].get("step_id", 1)),
+                    "start_frame_index": 1,
+                    "end_frame_index": num_frames + 1,
+                    "value": "yes",
+                }
+            ]
+        }
+        ok, errors, by_id = validate_stage2_localization(
+            draft_plan, synthetic_loc, num_frames, frame_timestamps=ts_list
+        )
+        if not ok:
+            raise RuntimeError(
+                f"Stage 2 short-video single-step synthetic localization failed validation: {errors}"
+            )
+        localization = synthetic_loc
+        loc_by_id = by_id
+        localization_from_cache = True  # also skips the boundary-verification pass below
+        write_text(sys_prompt_path, "Skipped: source_video_duration_sec < 15s; treated as a single step.")
+        write_text(user_prompt_path, "Skipped: source_video_duration_sec < 15s; treated as a single step.")
+    # If a previous run produced a valid localization JSON but failed during ffmpeg cutting,
+    # reuse it to avoid re-calling the model.
+    elif not overwrite and os.path.exists(loc_path):
+        try:
+            loc_mtime = float(os.path.getmtime(loc_path))
+            input_mtime = max(float(os.path.getmtime(draft_path)), float(os.path.getmtime(manifest_path)))
+            if loc_mtime + 1e-6 < input_mtime:
+                logger.warning(
+                    f"[stage2] Cached localization is older than current Stage1 inputs; ignoring: {os.path.relpath(loc_path, video_out)}"
+                )
+            else:
+                cached_loc = read_json(loc_path)
+                ok, errors, by_id = validate_stage2_localization(
+                    draft_plan, cached_loc, num_frames, frame_timestamps=ts_list
+                )
+                if ok:
+                    ok, errors, cached_loc, by_id = _validate_or_repair_no_short_steps(
+                        draft_plan=draft_plan,
+                        ordered_steps=ordered_steps,
+                        localization=cached_loc,
+                        loc_by_id=by_id,
+                        num_frames=num_frames,
+                        timestamps=ts_list,
+                        context=f"video_id={vid} cached localization",
+                    )
+                if ok:
+                    localization = cached_loc
+                    loc_by_id = by_id
+                    localization_from_cache = True
+                    cached_loc_mtime = loc_mtime
+                    if not os.path.exists(sys_prompt_path):
+                        write_text(sys_prompt_path, system_text)
+                    if not os.path.exists(user_prompt_path):
+                        write_text(user_prompt_path, base_prompt)
+                    logger.info(f"[stage2] video_id={vid} reusing cached localization: {os.path.relpath(loc_path, video_out)}")
+                else:
+                    last_errors = errors
+        except Exception as e:
+            last_errors = [f"Failed to load cached localization: {e}"]
+
+    if localization is None:
+        # If step clips already exist but we don't have a valid cached localization to match them,
+        # fail fast to avoid writing mismatched segments metadata.
+        if not overwrite and os.path.isdir(clips_dir):
+            existing = [n for n in os.listdir(clips_dir) if n.lower().endswith(".mp4")]
+            if existing:
+                raise RuntimeError(
+                    f"Found existing stage2 clips under {clips_dir} but no valid cached localization at {loc_path}. "
+                    "To avoid mismatched clips/segments, delete stage2/step_clips or re-run with --overwrite."
+                )
+
+        client = initialize_api_client(api_cfg)
+        if not client:
+            raise SystemExit("Failed to initialize API client.")
+
+        # Persist the prompts used for THIS localization run.
+        write_text(sys_prompt_path, system_text)
+        write_text(user_prompt_path, base_prompt)
+
+        frames_content = build_video_api_content(
+            video_path,
+            frames,
+            video_fps=api_cfg.video_fps,
+            include_manifest=True,
+        )
+        base_user_content = [{"type": "text", "text": base_prompt}] + frames_content
+        system_msg = {"role": "system", "content": system_text}
+
+        for attempt in range(1, max_retries + 1):
+            logger.info(f"[stage2] video_id={vid} localize attempt={attempt}/{max_retries}")
+            if attempt == 1:
+                user_content = base_user_content
+            else:
+                prefix = build_retry_prefix(last_errors, last_content)
+                user_content = [{"type": "text", "text": prefix + base_prompt}] + frames_content
+
+            messages = [system_msg, {"role": "user", "content": user_content}]
+            content, usage = call_chat_completion(client, api_cfg, messages, max_tokens=min(api_cfg.max_tokens, 12000))
+            stage_usage["prompt_tokens"] += usage.get("prompt_tokens", 0)
+            stage_usage["completion_tokens"] += usage.get("completion_tokens", 0)
+            stage_usage["total_tokens"] += usage.get("total_tokens", 0)
+            stage_usage["api_calls"] += 1
+            last_content = content
+
+            try:
+                clean = extract_json_from_response(content)
+                localization = json.loads(clean)
+            except Exception as e:
+                last_errors = [f"JSON parse error: {e}"]
+                localization = None
+                continue
+
+            ok, errors, by_id = validate_stage2_localization(draft_plan, localization, num_frames, frame_timestamps=ts_list)
+            if ok:
+                ok, errors, localization, by_id = _validate_or_repair_no_short_steps(
+                    draft_plan=draft_plan,
+                    ordered_steps=ordered_steps,
+                    localization=localization,
+                    loc_by_id=by_id,
+                    num_frames=num_frames,
+                    timestamps=ts_list,
+                    context=f"video_id={vid} model localization",
+                )
+            if ok:
+                loc_by_id = by_id
+                break
+            last_errors = errors
+            localization = None
+
+    if localization is None:
+        if last_content:
+            write_text(raw_path, last_content)
+        raise RuntimeError(f"Stage 2 failed after {max_retries} attempts: " + " | ".join(last_errors[:10]))
+
+    logger.info(f"[stage2] video_id={vid} localization OK (source={'cache' if localization_from_cache else 'model'})")
+    draft_plan_outline = _build_draft_plan_outline(ordered_steps)
+
+    # ---- BOUNDARY VERIFICATION PASS (Refine pipeline) ----
+    # Only run when localization came from the model (not from cache),
+    # because we need the frames_content and client objects from the model call path.
+    if localization is not None and not localization_from_cache:
+        verification_prompt = build_stage2_boundary_verification_prompt(
+            high_level_goal,
+            draft_plan_outline,
+            num_frames,
+            json.dumps(localization, indent=2),
+        )
+
+        verify_sys_prompt_path = os.path.join(stage2_dir, "stage2_verify_system_prompt.txt")
+        verify_user_prompt_path = os.path.join(stage2_dir, "stage2_verify_user_prompt.txt")
+        verify_raw_path = os.path.join(stage2_dir, "stage2_verify_raw_response.txt")
+
+        verify_system_text = (
+            "You are an expert video step boundary verifier. "
+            "Return strict JSON only (no markdown, no extra text)."
+        )
+        write_text(verify_sys_prompt_path, verify_system_text)
+        write_text(verify_user_prompt_path, verification_prompt)
+
+        verify_user_content = [{"type": "text", "text": verification_prompt}] + frames_content
+        verify_system_msg = {"role": "system", "content": verify_system_text}
+        verify_messages = [verify_system_msg, {"role": "user", "content": verify_user_content}]
+
+        logger.info(f"[stage2] video_id={vid} boundary verification pass starting")
+
+        try:
+            verify_content, verify_usage = call_chat_completion(
+                client, api_cfg, verify_messages,
+                max_tokens=min(api_cfg.max_tokens, 12000),
+            )
+            stage_usage["prompt_tokens"] += verify_usage.get("prompt_tokens", 0)
+            stage_usage["completion_tokens"] += verify_usage.get("completion_tokens", 0)
+            stage_usage["total_tokens"] += verify_usage.get("total_tokens", 0)
+            stage_usage["api_calls"] += 1
+            write_text(verify_raw_path, verify_content)
+
+            verify_clean = extract_json_from_response(verify_content)
+            verified_loc = json.loads(verify_clean)
+
+            v_ok, v_errors, v_by_id = validate_stage2_localization(
+                draft_plan, verified_loc, num_frames, frame_timestamps=ts_list,
+            )
+            if v_ok:
+                v_ok, v_errors, verified_loc, v_by_id = _validate_or_repair_no_short_steps(
+                    draft_plan=draft_plan,
+                    ordered_steps=ordered_steps,
+                    localization=verified_loc,
+                    loc_by_id=v_by_id,
+                    num_frames=num_frames,
+                    timestamps=ts_list,
+                    context=f"video_id={vid} verification localization",
+                )
+
+            if v_ok:
+                changed = []
+                for sid_v in sorted(loc_by_id):
+                    orig = loc_by_id[sid_v]
+                    veri = v_by_id.get(sid_v, {})
+                    if (orig.get("start_frame_index") != veri.get("start_frame_index")
+                            or orig.get("end_frame_index") != veri.get("end_frame_index")):
+                        changed.append(
+                            f"step_id={sid_v}: "
+                            f"[{orig['start_frame_index']},{orig['end_frame_index']}) -> "
+                            f"[{veri['start_frame_index']},{veri['end_frame_index']})"
+                        )
+                if changed:
+                    logger.info(
+                        f"[stage2] video_id={vid} verification adjusted {len(changed)} "
+                        f"boundaries: " + "; ".join(changed)
+                    )
+                else:
+                    logger.info(
+                        f"[stage2] video_id={vid} verification confirmed all boundaries unchanged"
+                    )
+                localization = verified_loc
+                loc_by_id = v_by_id
+            else:
+                logger.warning(
+                    f"[stage2] video_id={vid} verification output invalid, "
+                    f"keeping original boundaries. Errors: {v_errors[:5]}"
+                )
+        except Exception as e:
+            logger.warning(
+                f"[stage2] video_id={vid} verification pass failed ({e}), keeping original boundaries"
+            )
+    # ---- END BOUNDARY VERIFICATION PASS ----
+
+    # Persist raw outputs
+    if _draft_steps_signature(draft_plan) != initial_draft_steps_signature:
+        os.makedirs(stage2_dir, exist_ok=True)
+        backup_draft_path = os.path.join(stage2_dir, "draft_plan_before_no_short_merge.json")
+        if not os.path.exists(backup_draft_path):
+            try:
+                write_json(backup_draft_path, read_json(draft_path))
+            except Exception:
+                pass
+        write_json(draft_path, draft_plan)
+        logger.warning(
+            f"[stage2] video_id={vid} persisted merged no-short-step draft plan: "
+            f"{os.path.relpath(draft_path, video_out)}"
+        )
+
+    if last_content:
+        write_text(raw_path, last_content)
+        write_json(loc_path, localization)
+    elif overwrite or not os.path.exists(loc_path):
+        write_json(loc_path, localization)
+
+    # Build step segments + cut clips
+    manifest = read_json(manifest_path)
+    frames_meta = {int(e["frame_index_1based"]): e for e in manifest.get("frames", []) if isinstance(e, dict) and "frame_index_1based" in e}
+    source_total_frames = int(manifest.get("source_total_frames", 0) or 0)
+    source_duration_sec = float(manifest.get("source_video_duration_sec", 0.0) or 0.0)
+
+    os.makedirs(clips_dir, exist_ok=True)
+
+    segments: List[Dict[str, Any]] = []
+
+    timestamps = ts_list
+    min_delta_sec = estimate_min_positive_delta_sec(timestamps)
+
+    bounds: List[Dict[str, Any]] = []
+    for step in ordered_steps:
+        sid = int(step.get("step_id", 0))
+        goal = str(step.get("step_goal", "")).strip()
+        seg_idx = loc_by_id.get(sid)
+        if not seg_idx:
+            raise RuntimeError(f"Missing localization for step_id={sid} after validation.")
+        bounds.append(
+            {
+                "step_id": sid,
+                "step_goal": goal,
+                "start_frame_index": int(seg_idx["start_frame_index"]),
+                "end_frame_index": int(seg_idx["end_frame_index"]),
+                "value": seg_idx["value"],
+            }
+        )
+
+    for i, b in enumerate(bounds):
+        step_no = i + 1
+        total_steps = len(bounds)
+        sid = int(b["step_id"])
+        goal = str(b["step_goal"])
+        sidx = int(b["start_frame_index"])
+        eidx = int(b["end_frame_index"])
+        start_sec = float(timestamps[sidx - 1])
+        if eidx == num_frames + 1:
+            end_sec = source_duration_sec if source_duration_sec > 0 else float(timestamps[-1]) + float(min_delta_sec)
+        else:
+            end_sec = float(timestamps[eidx - 1])
+        start_frame_0based = int(frames_meta.get(sidx, {}).get("source_frame_0based", frames_meta.get(sidx, {}).get("original_frame_index", -1)))
+        if eidx == num_frames + 1:
+            end_frame_0based_exclusive = source_total_frames if source_total_frames > 0 else start_frame_0based + 1
+        else:
+            end_frame_0based_exclusive = int(
+                frames_meta.get(eidx, {}).get("source_frame_0based", frames_meta.get(eidx, {}).get("original_frame_index", -1))
+            )
+        if start_frame_0based >= 0:
+            end_frame_0based_exclusive = max(start_frame_0based + 1, end_frame_0based_exclusive)
+        if source_total_frames > 0:
+            end_frame_0based_exclusive = min(end_frame_0based_exclusive, source_total_frames)
+        end_frame_0based_inclusive = max(start_frame_0based, end_frame_0based_exclusive - 1)
+        next_start_sec: Optional[float] = None
+        if i + 1 < len(bounds):
+            next_sidx = int(bounds[i + 1]["start_frame_index"])
+            next_start_sec = float(timestamps[next_sidx - 1])
+        end_sec = _adjust_end_sec_if_needed(
+            step_id=sid,
+            start_sec=start_sec,
+            end_sec=end_sec,
+            min_delta_sec=min_delta_sec,
+            next_step_start_sec=next_start_sec,
+            timestamps=timestamps,
+            end_index_1based=eidx,
+        )
+        if not (end_sec > start_sec):
+            raise RuntimeError(
+                f"Invalid (non-positive) clip duration after adjustment for step_id={sid}: start_sec={start_sec}, end_sec={end_sec}"
+            )
+
+        clip_relpath = stage2_step_clip_relpath(sid, goal)
+        clip_path = os.path.join(stage2_dir, clip_relpath)
+        goal_short = " ".join(str(goal).split())
+        logger.info(
+            f"[stage2] video_id={vid} clip {step_no}/{total_steps} step_id={sid}: "
+            f"{start_sec:.2f}s..{end_sec:.2f}s goal='{goal_short}' -> {os.path.relpath(clip_path, video_out)}"
+        )
+        if (
+            not overwrite
+            and localization_from_cache
+            and os.path.exists(clip_path)
+            and os.path.getsize(clip_path) > 0
+        ):
+            need_recut = False
+            if cached_loc_mtime is not None:
+                try:
+                    clip_mtime = float(os.path.getmtime(clip_path))
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Failed to verify existing clip freshness vs cached localization: {clip_path}: {e}"
+                    ) from e
+                # If the clip is older than the cached localization, it likely comes from a different run.
+                if clip_mtime + 1.0 < float(cached_loc_mtime):
+                    logger.warning(
+                        f"[stage2] video_id={vid} existing clip is older than cached localization; re-cutting to match: "
+                        f"{os.path.relpath(clip_path, video_out)}"
+                    )
+                    need_recut = True
+            if not can_open_video(clip_path):
+                logger.warning(
+                    f"[stage2] video_id={vid} existing clip is unreadable; re-cutting: {os.path.relpath(clip_path, video_out)}"
+                )
+                need_recut = True
+            if need_recut:
+                cut_video_segment_ffmpeg(
+                    ffmpeg_bin,
+                    video_path,
+                    start_sec,
+                    end_sec,
+                    clip_path,
+                    overwrite=True,
+                    mode=cut_mode,
+                    seek_slop_sec=seek_slop_sec,
+                    crf=crf,
+                    preset=preset,
+                    keep_audio=keep_audio,
+                )
+                if not can_open_video(clip_path):
+                    raise RuntimeError(f"ffmpeg re-cut produced an unreadable clip: {clip_path}")
+            else:
+                logger.info(
+                    f"[stage2] video_id={vid} reusing existing clip (overwrite disabled): {os.path.relpath(clip_path, video_out)}"
+                )
+        elif not overwrite and os.path.exists(clip_path):
+            raise RuntimeError(
+                f"Found an existing clip but overwrite is disabled: {clip_path}. "
+                "This usually means a previous Stage-2 run was interrupted and you are now generating a NEW localization; "
+                "to avoid mismatched clips/segments, delete stage2/step_clips or re-run with --overwrite."
+            )
+        else:
+            cut_video_segment_ffmpeg(
+                ffmpeg_bin,
+                video_path,
+                start_sec,
+                end_sec,
+                clip_path,
+                overwrite=overwrite,
+                mode=cut_mode,
+                seek_slop_sec=seek_slop_sec,
+                crf=crf,
+                preset=preset,
+                keep_audio=keep_audio,
+            )
+            if not os.path.exists(clip_path) or os.path.getsize(clip_path) <= 0:
+                raise RuntimeError(f"ffmpeg produced an empty clip: {clip_path}")
+            if not can_open_video(clip_path):
+                raise RuntimeError(f"ffmpeg produced an unreadable clip: {clip_path}")
+
+        segments.append(
+            {
+                "step_id": sid,
+                "step_goal": goal,
+                "value": b["value"],
+                "start_frame_0based": start_frame_0based,
+                "end_frame_0based_exclusive": end_frame_0based_exclusive,
+                "end_frame_0based_inclusive": end_frame_0based_inclusive,
+                "start_sec": start_sec,
+                "end_sec": end_sec,
+                "start_image_relpath": frames_meta.get(sidx, {}).get("image_relpath"),
+                "end_image_relpath": frames_meta.get(min(eidx, num_frames), {}).get("image_relpath"),
+                "clip_relpath": os.path.relpath(clip_path, stage2_dir),
+            }
+        )
+
+    write_json(
+        segments_path,
+        {
+            "source_video": build_source_video_meta(video_path),
+            "num_frames": num_frames,
+            "frame_index_sampling_fps": manifest.get("frame_index_sampling_fps"),
+            "frame_index_sampling_mode": manifest.get("frame_index_sampling_mode"),
+            "source_video_fps": manifest.get("source_video_fps"),
+            "source_total_frames": source_total_frames,
+            "source_video_duration_sec": source_duration_sec,
+            "cut": {
+                "mode": cut_mode,
+                "seek_slop_sec": float(seek_slop_sec),
+                "crf": int(crf),
+                "preset": preset,
+                "keep_audio": bool(keep_audio),
+                "ffmpeg_bin": ffmpeg_bin,
+            },
+            "segments": segments,
+        },
+    )
+
+    update_run_summary(
+        run_summary_path,
+        {
+            "source_video": build_source_video_meta(video_path),
+            "output_root": os.path.abspath(output_root),
+            "schema_fingerprint": schema_fp,
+            "updated_at_utc": now_utc_iso(),
+            "stage2": {
+                "status": "completed",
+                "localization_raw_path": os.path.relpath(loc_path, video_out),
+                "segments_path": os.path.relpath(segments_path, video_out),
+                "clips_dir": os.path.relpath(clips_dir, video_out),
+                "system_prompt_path": os.path.relpath(sys_prompt_path, video_out),
+                "user_prompt_path": os.path.relpath(user_prompt_path, video_out),
+                "api_config": {
+                    "api_base_url": api_cfg.api_base_url,
+                    "model_provider_id": api_cfg.model_provider_id,
+                    "model_name": api_cfg.model_name,
+                    "reasoning_effort": api_cfg.reasoning_effort,
+                    "max_tokens": int(api_cfg.max_tokens),
+                    "temperature": float(getattr(api_cfg, "temperature", 0.2)),
+                    "api_call_retries": int(getattr(api_cfg, "api_call_retries", 1)),
+                    "api_call_retry_backoff_sec": float(getattr(api_cfg, "api_call_retry_backoff_sec", 1.0)),
+                },
+                "token_usage": stage_usage,
+            },
+        },
+    )
+
+    logger.info(
+        f"[stage2] video_id={vid} completed: clips={len(segments)} elapsed={format_duration(time.perf_counter() - t_start)}"
+    )
+    return video_out
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Stage 2: localize steps and cut per-step clips.")
+    src = parser.add_mutually_exclusive_group(required=True)
+    src.add_argument("--input-video", help="Path to one video file.")
+    src.add_argument("--input-video-dir", help="Directory of videos to process.")
+    parser.add_argument("--output-root", default=default_output_root(), help="Output root under ECCV/three_stage/...")
+
+    add_api_cli_args(parser, include_no_embed_index=True)
+
+    parser.add_argument("--ffmpeg-bin", default="ffmpeg")
+    parser.add_argument("--cut-mode", choices=["copy", "reencode"], default="reencode", help="ffmpeg cut mode (copy is fast but may snap to keyframes).")
+    parser.add_argument("--seek-slop-sec", type=float, default=1.0, help="Re-encode mode: pre-seek slop (seconds) for hybrid accurate seek.")
+    parser.add_argument("--crf", type=int, default=18, help="Re-encode mode: x264 CRF (lower=better quality).")
+    parser.add_argument("--preset", default="veryfast", help="Re-encode mode: x264 preset.")
+    parser.add_argument("--keep-audio", action="store_true", help="Keep/re-encode audio into the clip (default: drop audio).")
+    parser.add_argument("--max-retries", type=int, default=3)
+    parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--allow-legacy-resume",
+        action="store_true",
+        help="Allow resuming cached outputs whose run_summary.json lacks schema_fingerprint (legacy outputs).",
+    )
+    args = parser.parse_args()
+
+    api_cfg = api_config_from_args(args)
+
+    videos: List[str] = []
+    if args.input_video:
+        videos = [args.input_video]
+    else:
+        videos = collect_videos(args.input_video_dir, VIDEO_EXTS)
+
+    if not videos:
+        raise SystemExit("No videos found.")
+
+    for vp in videos:
+        run_stage2_for_video(
+            vp,
+            args.output_root,
+            api_cfg,
+            ffmpeg_bin=args.ffmpeg_bin,
+            overwrite=args.overwrite,
+            max_retries=args.max_retries,
+            cut_mode=args.cut_mode,
+            seek_slop_sec=args.seek_slop_sec,
+            crf=args.crf,
+            preset=args.preset,
+            keep_audio=args.keep_audio,
+            allow_legacy_resume=args.allow_legacy_resume,
+        )
+
+
+if __name__ == "__main__":
+    main()

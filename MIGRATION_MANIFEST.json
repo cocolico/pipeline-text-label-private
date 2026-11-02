@@ -1,0 +1,616 @@
+{
+  "source_directory": "/home/ty/ty_works/pipeline_text_label-20261016-172802/pipeline_text_label",
+  "source_commit": "4f7ec57",
+  "history_imported": false,
+  "excluded": [
+    "--host",
+    "--port",
+    "--video",
+    "api/models/mano_v1_2_extracted/mano_v1_2/.DS_Store",
+    "api/models/mano_v1_2_extracted/mano_v1_2/._.DS_Store",
+    "api/models/wilor/mano_data/MANO_LEFT.pkl",
+    "api/models/wilor/mano_data/MANO_RIGHT.pkl",
+    "api/models/wilor/pretrained_models/detector.pt",
+    "api/models/wilor/pretrained_models/wilor_final.ckpt",
+    "bin/ffmpeg",
+    "pipeline_monitor.log",
+    "test_run2.log",
+    "test_run3.log",
+    "test_run4.log",
+    "test_run5.log"
+  ],
+  "sanitized": [
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/common.py",
+      "replaced_credentials": 1
+    },
+    {
+      "path": "api/tools/ark_image_understanding_current.py",
+      "replaced_credentials": 1
+    },
+    {
+      "path": "api/tools/ark_video_understanding_current.py",
+      "replaced_credentials": 1
+    },
+    {
+      "path": "api/tools/super_filter_steps_with_seed21_audit.py",
+      "replaced_credentials": 1
+    }
+  ],
+  "files": [
+    {
+      "path": ".dockerignore",
+      "size": 168,
+      "sha256": "f1d8cc2a655703925af2a766ebda61c1a2a1f97aea9e93afc991e1d2e921e464"
+    },
+    {
+      "path": ".gitignore",
+      "size": 334,
+      "sha256": "01e85f9d6c852af8e196e5b38dc062cc58e3752eecd39ee471680e719d5c1d19"
+    },
+    {
+      "path": "Dockerfile",
+      "size": 1241,
+      "sha256": "2f6fdc99c381fe5d21cc46e129446e231466ff40bfefe723dcc324857b71bca8"
+    },
+    {
+      "path": "README.md",
+      "size": 15072,
+      "sha256": "e9d1dd2e43b7d683d36609ba3f7c2a039a4f01bdbfd31cf7eccccf9e6dd2bfa0"
+    },
+    {
+      "path": "agent_dispatch.py",
+      "size": 4579,
+      "sha256": "dde96a30447be5ca47dec1a09016251fef0b199812f4f4fc18c390d8f7b23feb"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/README_STAGE5_SAM3.md",
+      "size": 7424,
+      "sha256": "00632cd26c5d4a5e7d7d3feecbdf2a35af4739958f086750bc4b24aa0ca4b5f5"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/STAGE5_BBOX_TRACKING.md",
+      "size": 4768,
+      "sha256": "8c407baca4e1d35f6829ea962d1644f95425c24ed3bdc94fd2c4fc58aa802322"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/api_client_qwen_v2.py",
+      "size": 13350,
+      "sha256": "0a405e6941e9557a5ce1670a1de69362d4f2bb1a18f269c14729add081ce0e8e"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/common.py",
+      "size": 67740,
+      "sha256": "098e65be0a30e659c53ae78d9967da8d236dd2007305f23b4962a81e2a7182ab"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/hand_step_pipeline.py",
+      "size": 198887,
+      "sha256": "e68534302f002fe4ba36c854eb15ad161a6930e1e354b0a8a10ab92f5eacba35"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/hand_step_pipeline.py.bak_20260907_frameratio",
+      "size": 196475,
+      "sha256": "1f0ea37ac32882e62d2119de38f87854298c62a870a899401f76fa345150b9af"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/hand_step_pipeline.py.bak_before_modified_bbox_field",
+      "size": 178575,
+      "sha256": "7815c69f69e71b40f3da9e0a473b051d8f3074ed507bc74918bee46129799d9c"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/pipeline.py",
+      "size": 57307,
+      "sha256": "c222f845b9152d159dd2fe6cbb974f868bb3420e941f997daaddcdb4eaeced04"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/pipeline.py.bak_20260809_132511",
+      "size": 55446,
+      "sha256": "cb7ecbadca25627ebedd22c418fe7c67e14b38a2ea624555f3c32ba06495c8ca"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/pipeline.py.bak_20260813_defaults",
+      "size": 55528,
+      "sha256": "44ef3d7215b3970f447bd31dbce1da2f5d8108b9877771a52c8711958e5ab066"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/pipeline.py.bak_20260813_dual_value_gate",
+      "size": 55529,
+      "sha256": "3864d52d1b578cc8b134f3dbf7893c2d2a1c8e50d3ceac79722f563b07c3db8b"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/prompts.py",
+      "size": 44200,
+      "sha256": "9ea79c656b7558c8e0886f97a4147a46cf50cf6adea5c4894853bb089554b55e"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/prompts.py.bak_20260813_doubao_format",
+      "size": 41997,
+      "sha256": "fb99fcd99e33bd7aa9159c26a4172ec95d44c9700ba62fba96107a582d1a45ef"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/prompts.py.bak_20260813_hand_goal",
+      "size": 40450,
+      "sha256": "ee7f2ce97a7ae3090846f9da85b773d8e83a5dab501f8f0bd75f1b66c6039e44"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/prompts.py.bak_20260813_parallel_primary_hands",
+      "size": 40833,
+      "sha256": "1047486334d8ea0df026b79f12c2bd8afd58aca00e7ebb278ce71c6ec8ce9f6a"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/realtime_hand_step_visualizer.py",
+      "size": 48468,
+      "sha256": "5b05a02bf36909276fd24d2c3542caded347dbfba3d285747810a81a6a033a64"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/requirements_stage5_bbox.txt",
+      "size": 225,
+      "sha256": "fbf50bac0e43e017d94e8e260f3815795d58af4aee73aae351ee87f03a6aa710"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/requirements_stage5_sam3.txt",
+      "size": 15,
+      "sha256": "2859f93fb6c3a22b0223e8aa7bcb47e32907415db817bebd7c8f63ec38540c70"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/run_with_resource_monitor.sh",
+      "size": 9101,
+      "sha256": "bba52cdda2414e388e4d7b5e292f61a87fe8372e6458ba0259c62119029c211e"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/run_with_resource_monitor.sh.bak_20260813_defaults",
+      "size": 9021,
+      "sha256": "120b67f1e2fdc4d7ab6de394a34b9158947bd3c0dd666d0ca6d92b69610f5e48"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/setup_stage5_bbox_env.sh",
+      "size": 4901,
+      "sha256": "8916b28a505adcbb78bedd6bcfc0c9d7192dbcb444a93530bc6b6965bc6057ab"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/stage1_generate_draft.py",
+      "size": 16757,
+      "sha256": "5b749ddfb576ad351c1380036593bfbcd4115834e1ee1d6d9c16803508a3593e"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/stage2_localize_and_cut.py",
+      "size": 48551,
+      "sha256": "8b09cefbb5cf3c3c19d899f1d07d46eef2ce557d5b7090551872e128411b0ed4"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/stage2_localize_and_cut.py.bak_20260812_125613",
+      "size": 44948,
+      "sha256": "c0d8e72059c4a8fffc0224c9506b1546c68a367899f7ab0685608594381b0a84"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/stage2h_qc_hand_depth.py",
+      "size": 31002,
+      "sha256": "987501e0064385d4b5b5dc98e144e8e9650d1e1877ef84a79d181745cf26462c"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/stage2h_qc_hand_depth.py.bak_20260809_132225",
+      "size": 14931,
+      "sha256": "b3fa58558185c8a6dc900a894f95c25907a9ac12e164369e7f26a059e0e17c5b"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/stage2h_qc_hand_depth.py.bak_20260813_doubao_format",
+      "size": 30731,
+      "sha256": "0468179308952d1de16304ffcfb9438a3d7282bcf0c07b65790d99c382b56d4a"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/stage2h_qc_hand_depth.py.bak_20260813_dual_value_gate",
+      "size": 21263,
+      "sha256": "7c16e89f8814da8d189a560fdf20ce1bfb0084ea0d6e8fb1da54f5b0fa1f9b99"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/stage2h_qc_hand_depth.py.bak_20260813_hand_focus",
+      "size": 27766,
+      "sha256": "25b00dc32f51e99d01bd362cb7baa99ab8317710076ec3b0103724f9cbc77196"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/stage3_refine_and_keyframes.py",
+      "size": 55670,
+      "sha256": "4cbe613c8f10eb82ee232575332d5331ea90e82c9f048f05646098e35d628fbb"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/stage3_refine_and_keyframes.py.bak_20260809_132525",
+      "size": 33753,
+      "sha256": "baaa68720bd15f9150ebb72e619573a06f9aa0738e226b747cd75df2f76504e7"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/stage3_refine_and_keyframes.py.bak_20260811_191133",
+      "size": 34817,
+      "sha256": "386b07b109d7a2dc146aeb33099edc8793f16acfa3f85065909a7d02cd80a3de"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/stage3_refine_and_keyframes.py.bak_20260812_160401",
+      "size": 36302,
+      "sha256": "dd8639909ef5add0d0fe487669c6bac88836f241040077abf8cd6442413e65d0"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/stage4_atomic_actions.py",
+      "size": 66657,
+      "sha256": "c9d077481ff477d6f3309ee84d13784b26bd019cd0556abcbe156eababb9efa1"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/stage4_atomic_actions.py.bak_20260812_entity_ref",
+      "size": 59201,
+      "sha256": "bfea76c09cd8a7c1abaf23879f1c767ad4742e59edd07a74306a3d5319c81e1f"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/stage5_bbox_tracking.py",
+      "size": 228455,
+      "sha256": "202d7e1529216cf0e03fd87a4b0fbb31795481a27b66e317d0d8e6bb6a0ed667"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/stage5_bbox_tracking.py.bak_20260809_185415",
+      "size": 228156,
+      "sha256": "c9dbebd844018fce95b01f3a67bd3647ae4da499af7cbf9cb46be73e94bbd6f0"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/stage5_sam3_backend.py",
+      "size": 13305,
+      "sha256": "9fa359b4d273bf1a2393316360c448c32af1e698cb846cf753d869cb7ac7c3c8"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/tests/test_exact_frame_cut.py",
+      "size": 2836,
+      "sha256": "25df3fd75e3064f88460193d1dc04a1d9dcadc7319db5064edc7fd2163c75d7f"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/tests/test_hand_step_pipeline.py",
+      "size": 48510,
+      "sha256": "1b02b6fb687acb97353a42198c99d92e0737314cdd54e18b4a84197249871e54"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/tests/test_no_gpu_defaults_and_subtask.py",
+      "size": 5631,
+      "sha256": "cd85b3180689bc885ec7ea3d7a01d826d2ed9e1f8d416341a87dc5ddf4230b32"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/tests/test_realtime_hand_step_visualizer.py",
+      "size": 8575,
+      "sha256": "5d13364dedd563651bc916cb0f87efbc8dd9ddfceb92dd395e76db933473b52f"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/tests/test_reasoning_config.py",
+      "size": 2800,
+      "sha256": "b1d3f28de6af6b936ecb8bfeb64ff43e4d28589822fda9078b9093d9d1bb5d13"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/tests/test_stage2h_value_gate.py",
+      "size": 3022,
+      "sha256": "e657ca90615e07c23e666e6ad633955087608be23e0cae1179e44f854b2636ba"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/tests/test_stage3_terminal_outputs.py",
+      "size": 12235,
+      "sha256": "0499b36b890de731589b47d3aeb21b1f874d29437c30abff8bf1d16d979c1a91"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/tests/test_stage4_object_inventory.py",
+      "size": 16909,
+      "sha256": "9a263b9b6672d68d2a990a7786ba085421a9938fe4d027a4996bee8bebb833ce"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/tests/test_stage4_object_inventory.py.bak_20260812_entity_ref",
+      "size": 8495,
+      "sha256": "63cdc4a87823c604382ae224c5cd3f02c7e13af0ca052a5a792805cfe10d3106"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/tests/test_stage5_quality.py",
+      "size": 44003,
+      "sha256": "ad62aab4f64ef3a7e3ec73ea41b2c884b62ae287130201eb1ab148e04554a07c"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/tests/test_text_annotation_goal.py",
+      "size": 5844,
+      "sha256": "b47309e1def7de6d546aa0dcff3951535890ca654d362c892c40cde7570905b6"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/text_annotation_goal.py",
+      "size": 1621,
+      "sha256": "2f4ffd41c7c576aa4452984cee8f44ae0050b6b067ea5dde47c15a96a1d1a2ed"
+    },
+    {
+      "path": "api/api_seed_openai_easy_no_short_step/visualize_object_inventory.py",
+      "size": 5986,
+      "sha256": "ff1aac7642617eec84b5656cefdaf944528af7539ede96118d94f6aab5991eb5"
+    },
+    {
+      "path": "api/litchi_718_aglin_6rgb_latest_full5_run_20260720_152921/INPUT_MANIFEST.tsv",
+      "size": 1467,
+      "sha256": "ebac434556909acab2dda769c9aef3b2bd63a6b6ef88a95143442f1b8ea30637"
+    },
+    {
+      "path": "api/litchi_718_aglin_6rgb_latest_full5_run_20260720_152921/RUN_CONFIG.md",
+      "size": 1700,
+      "sha256": "61c6cc713e3d8cd054793d1d2766f5d52abdac2b13c6ad1b94beee5c30ea6b4c"
+    },
+    {
+      "path": "api/litchi_718_aglin_6rgb_latest_full5_run_20260720_152921/scripts/audit_outputs.py",
+      "size": 8647,
+      "sha256": "a77f3b161de27728cdf9c1b0454098fef1e7a57a669df04f0d6a5e4e4ea3c570"
+    },
+    {
+      "path": "api/litchi_718_aglin_6rgb_latest_full5_run_20260720_152921/scripts/run_remote_pipeline.sh",
+      "size": 2233,
+      "sha256": "ae34b405e08ef31b07e595939245ac9ae1dda7137e54e82108cfe6e3bdfb16e2"
+    },
+    {
+      "path": "api/litchi_718_aglin_6rgb_latest_full5_run_20260720_152921/scripts/run_remote_pipeline_v3.sh",
+      "size": 2233,
+      "sha256": "20bd650640dd5efcf01ec69d68d9294a8c3b916eb26136d8d8571dc989875bc2"
+    },
+    {
+      "path": "api/litchi_718_aglin_6rgb_latest_full5_run_20260720_152921/scripts/run_remote_pipeline_v4.sh",
+      "size": 2567,
+      "sha256": "cc5a409da67dd30be156e1b1fca04736bed65407b5dff23e6e3910ae106da933"
+    },
+    {
+      "path": "api/litchi_718_aglin_6rgb_latest_full5_run_20260720_152921/scripts/run_remote_stage5.sh",
+      "size": 3781,
+      "sha256": "e776ded84840577c6842651ae8f55a6a04010c4e239ad0c50f6b1c8ced88d7ff"
+    },
+    {
+      "path": "api/litchi_718_aglin_6rgb_latest_full5_run_20260720_152921/scripts/run_single_video_test.sh",
+      "size": 1297,
+      "sha256": "f0012590e083b824eb747a5556b1547c84386b78c4b1d158294b59266adb0fe3"
+    },
+    {
+      "path": "api/litchi_718_aglin_6rgb_latest_full5_run_20260720_152921/scripts/run_single_video_test_v3.sh",
+      "size": 1313,
+      "sha256": "455515378a4936ff04257b2c2ca8cd8f31475bec98a44f62f49225d54800f710"
+    },
+    {
+      "path": "api/litchi_718_aglin_6rgb_latest_full5_run_20260720_152921/scripts/run_single_video_test_v4.sh",
+      "size": 1294,
+      "sha256": "6d8bc2d13f84825083900bbe765a0fb4d6bcfbc8bc2cce2505f6cea41795167a"
+    },
+    {
+      "path": "api/litchi_718_aglin_6rgb_latest_full5_run_20260720_152921/scripts/sync_from_remote.sh",
+      "size": 979,
+      "sha256": "ec64652b63d4b4447435c9004ebfbb53d8c6a580a869cdf1f0140ff17b8d472b"
+    },
+    {
+      "path": "api/models/mano_v1_2.zip",
+      "size": 175200815,
+      "sha256": "50976831790ea9657d8110e0c94e50e90eaf35cd76169f0b27e5d32f3fcd951f"
+    },
+    {
+      "path": "api/models/mano_v1_2_extracted/mano_v1_2/LICENSE.txt",
+      "size": 4330,
+      "sha256": "75fc4da03259504ce9a4ed2418ab98dd59647add7ff95e7691c4d55fb0e3cf63"
+    },
+    {
+      "path": "api/models/mano_v1_2_extracted/mano_v1_2/__init__.py",
+      "size": 563,
+      "sha256": "e58cb6f49b363beda0b2fd95409b54d5e28d4e745bca9562ccead45fd02c6f7b"
+    },
+    {
+      "path": "api/models/mano_v1_2_extracted/mano_v1_2/models/LICENSE.txt",
+      "size": 4330,
+      "sha256": "75fc4da03259504ce9a4ed2418ab98dd59647add7ff95e7691c4d55fb0e3cf63"
+    },
+    {
+      "path": "api/models/mano_v1_2_extracted/mano_v1_2/models/MANO_LEFT.pkl",
+      "size": 3821391,
+      "sha256": "c4022f7083f2ca7c78b2b3d595abbab52debd32b09d372b16923a801f0ea6a30"
+    },
+    {
+      "path": "api/models/mano_v1_2_extracted/mano_v1_2/models/MANO_RIGHT.pkl",
+      "size": 3821356,
+      "sha256": "45d60aa3b27ef9107a7afd4e00808f307fd91111e1cfa35afd5c4a62de264767"
+    },
+    {
+      "path": "api/models/mano_v1_2_extracted/mano_v1_2/models/SMPLH_female.pkl",
+      "size": 130423021,
+      "sha256": "b3113724e824cf8f990977f327eaad724c943a56d895b72dc78c6fb647aa0e1e"
+    },
+    {
+      "path": "api/models/mano_v1_2_extracted/mano_v1_2/models/SMPLH_male.pkl",
+      "size": 130422893,
+      "sha256": "996338a29346b4d4bca2d7758d0304a346e833c10d1482b3b15d31164840dc3c"
+    },
+    {
+      "path": "api/models/mano_v1_2_extracted/mano_v1_2/models/info.txt",
+      "size": 95,
+      "sha256": "e172fdc3ea8c6143ad24867f107ffee99744db2212d0b98701a10db4d16f097e"
+    },
+    {
+      "path": "api/models/mano_v1_2_extracted/mano_v1_2/webuser/LICENSE.txt",
+      "size": 4330,
+      "sha256": "75fc4da03259504ce9a4ed2418ab98dd59647add7ff95e7691c4d55fb0e3cf63"
+    },
+    {
+      "path": "api/models/mano_v1_2_extracted/mano_v1_2/webuser/README.txt",
+      "size": 2327,
+      "sha256": "ad6f37c471a8ab200e8cbfddebbe392d5918952588db351083176fc75f2be0cf"
+    },
+    {
+      "path": "api/models/mano_v1_2_extracted/mano_v1_2/webuser/__init__.py",
+      "size": 562,
+      "sha256": "d74ced21f1d188012a4b924743c5a11f173d340a16ae01914a6e7f8e3ab177f5"
+    },
+    {
+      "path": "api/models/mano_v1_2_extracted/mano_v1_2/webuser/hello_world/MANO___hello_world.py",
+      "size": 2596,
+      "sha256": "1a5c6ffd84d7090ef0d9e5838f38583f620eaedccd2f84a1d2e75307b2f1831f"
+    },
+    {
+      "path": "api/models/mano_v1_2_extracted/mano_v1_2/webuser/hello_world/MANO___render.py",
+      "size": 5773,
+      "sha256": "f3370e2ae48c38c4e4750ff9aabd0c6a7f103114f2f9df6c20f9811fa08c7522"
+    },
+    {
+      "path": "api/models/mano_v1_2_extracted/mano_v1_2/webuser/hello_world/SMPL+H___hello_world.py",
+      "size": 3650,
+      "sha256": "cb6dac674f5ca70f2c8a63fff647adbe07d59fa25b8346d9d4a2995fadf16f6b"
+    },
+    {
+      "path": "api/models/mano_v1_2_extracted/mano_v1_2/webuser/hello_world/SMPL+H___render.py",
+      "size": 6811,
+      "sha256": "131017b7f30344410242a2f86e737ba8f756bd125e645395ced877fe9f061d28"
+    },
+    {
+      "path": "api/models/mano_v1_2_extracted/mano_v1_2/webuser/lbs.py",
+      "size": 3198,
+      "sha256": "bec1572ed1476a004973d9e55cff1afc27e8f8656b710509e428197191385049"
+    },
+    {
+      "path": "api/models/mano_v1_2_extracted/mano_v1_2/webuser/posemapper.py",
+      "size": 1620,
+      "sha256": "40c3bf9957b359db5eb52f6089ead9e44ad9ff5f22d4d0e20814ab149e94154d"
+    },
+    {
+      "path": "api/models/mano_v1_2_extracted/mano_v1_2/webuser/serialization.py",
+      "size": 5232,
+      "sha256": "3e94976f4787205c2b297fedb16a19c8c0fd6b94a554c2e9cb094b0099469d45"
+    },
+    {
+      "path": "api/models/mano_v1_2_extracted/mano_v1_2/webuser/smpl_handpca_wrapper.py",
+      "size": 5460,
+      "sha256": "e9a0283d872f5d12465b405cf8e292587243c5d9e885dc68032da7a31f4b8cc3"
+    },
+    {
+      "path": "api/models/mano_v1_2_extracted/mano_v1_2/webuser/smpl_handpca_wrapper_HAND_only.py",
+      "size": 4785,
+      "sha256": "080347cf7c87e7931aad33517f0284437c86b6c8de52e6a4cb41507cc6d9497e"
+    },
+    {
+      "path": "api/models/mano_v1_2_extracted/mano_v1_2/webuser/verts.py",
+      "size": 3457,
+      "sha256": "b6d46e2688aef5a37124de190ca86ede19ed39a84818f3ac9ef022f3092fc7ee"
+    },
+    {
+      "path": "api/tools/README_ark_visual_grounding_tests.md",
+      "size": 4517,
+      "sha256": "3a05ffbf80813a67eb051b442599ec36e95e1f8e632b4c238ef4fb4cf3365b95"
+    },
+    {
+      "path": "api/tools/ark_image_understanding_current.py",
+      "size": 4832,
+      "sha256": "169468af7cafad1d929d21f113276932125f34f2612e1d672f311434ef768c47"
+    },
+    {
+      "path": "api/tools/ark_video_understanding_current.py",
+      "size": 6502,
+      "sha256": "a2547f24c7c22c06a11b69f3af87b007a311576e48a43432d909795d0db0e344"
+    },
+    {
+      "path": "api/tools/ark_visual_grounding_common.py",
+      "size": 14472,
+      "sha256": "e27c0b7bba786c60cfb5b81a92eaa89056914acc745af0662c219a8c0017e200"
+    },
+    {
+      "path": "api/tools/requirements_ark_visual_grounding.txt",
+      "size": 15,
+      "sha256": "2859f93fb6c3a22b0223e8aa7bcb47e32907415db817bebd7c8f63ec38540c70"
+    },
+    {
+      "path": "api/tools/super_filter_steps_with_seed21_audit.py",
+      "size": 21439,
+      "sha256": "f5664d4dbe7ae5abecfdba547778d050dd99b5dff0bcb6b7bb75af1af808aeca"
+    },
+    {
+      "path": "api/tools/test_ark_bbox_grounding.py",
+      "size": 5996,
+      "sha256": "93b8e5ac1c665bf534742e505899a141c0d65a36862d45061bc8ea1887e715da"
+    },
+    {
+      "path": "api/tools/test_ark_left_right_hands.py",
+      "size": 9342,
+      "sha256": "2dad1f4707d4a33b1a67f8d05b6ded4b67044cf194d28cd1ca6352fd7911e26f"
+    },
+    {
+      "path": "api/tools/test_ark_point_grounding.py",
+      "size": 5606,
+      "sha256": "dd5dc005325a9a07abb3f0210af11d0d71db492b964980d9babadf4d729fe817"
+    },
+    {
+      "path": "api/tools/very_filter_steps_with_seed21_audit.py",
+      "size": 17658,
+      "sha256": "cc813ade37f70ab4bba52e9bd18a98ce45a73703d12c7c93ada7e815365523b7"
+    },
+    {
+      "path": "demos/franka_wuji/README.md",
+      "size": 6319,
+      "sha256": "34d7ebdc3ad911291f243af548bc2b6fbbd75517be2181d3ec68374d5cc1266c"
+    },
+    {
+      "path": "demos/franka_wuji/requirements.txt",
+      "size": 15,
+      "sha256": "bb5037feb4289bde8dd90271276e326088ea59a673d8b22e5ddc47588f5da765"
+    },
+    {
+      "path": "demos/franka_wuji/robot_prompt.txt",
+      "size": 2535,
+      "sha256": "3cd22a1f357804dce83446e58a1979dc87a9f0e8e8d591d64456ead30c35e765"
+    },
+    {
+      "path": "demos/franka_wuji/run_demo.py",
+      "size": 15679,
+      "sha256": "a45b12bd6de4babd5aed8c4c1f6e34b783b76081de32f8ba5c5d793df3c2ad64"
+    },
+    {
+      "path": "demos/franka_wuji/test_demo.py",
+      "size": 2836,
+      "sha256": "0e5af3ba423fa148d233a2390f9def10c6f6a8a11f9928f2ed9bb8d7a9b95698"
+    },
+    {
+      "path": "docker/Dockerfile",
+      "size": 802,
+      "sha256": "0fafc12c6ad5b44741486416d23da075e00bbeb9b739a4b81d9b656fe250efec"
+    },
+    {
+      "path": "docker/Dockerfile.full",
+      "size": 953,
+      "sha256": "b6ab413de2c711f7fcbf931a0d7cca5315cfb69e898cb7fe1be81f7c3400b4c4"
+    },
+    {
+      "path": "docker/requirements.txt",
+      "size": 342,
+      "sha256": "58a5deeac9cb8349809882491d062e5ba9165447bba8c50e65d645bd518b8570"
+    },
+    {
+      "path": "proc_monitor.py",
+      "size": 6200,
+      "sha256": "ae5dab1760a4edcfff841e3005f2d20d6931733cd56be717aa23c9fbf1d48ec5"
+    },
+    {
+      "path": "run_pipeline_monitor.sh",
+      "size": 9489,
+      "sha256": "3b6fc87e3205313798e71584d6d655ffa433f794108d04c83016d066793c6372"
+    },
+    {
+      "path": "run_pipeline_monitor.sh.bak_20260813_defaults",
+      "size": 9149,
+      "sha256": "daa8deb085f6cf1b595e2d227872185e1073800816d33ca199f928e7cb9bf6b8"
+    },
+    {
+      "path": "run_pipeline_monitor_test.sh",
+      "size": 12486,
+      "sha256": "fb258aa69cd06b53057fcab8b9eeb5ed86a6ae893ba63378eb71027727d056fd"
+    },
+    {
+      "path": "run_pipeline_monitor_test.sh.bak_20260813_defaults",
+      "size": 12486,
+      "sha256": "fb258aa69cd06b53057fcab8b9eeb5ed86a6ae893ba63378eb71027727d056fd"
+    },
+    {
+      "path": "watch_recursive_text_label.sh",
+      "size": 4101,
+      "sha256": "740929b0177d79741d0d85289ad946d7eb3a992de5776ade86f565ab77b0900c"
+    }
+  ],
+  "excluded_directory_names": [
+    ".git",
+    ".pytest_cache",
+    ".venv",
+    ".venv_pipeline",
+    "__pycache__",
+    "resource_monitor_logs",
+    "venv"
+  ]
+}
