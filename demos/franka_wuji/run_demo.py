@@ -154,7 +154,7 @@ def main():
     parser.add_argument('--dataset-root', required=True, type=Path)
     parser.add_argument('--run-dir', required=True, type=Path)
     parser.add_argument('--episode', type=int, default=0)
-    parser.add_argument('--camera', choices=['cam0', 'cam1', 'cam2'], default='cam1')
+    parser.add_argument('--camera', choices=['cam0', 'cam1', 'cam2'], default='cam0')
     parser.add_argument('--start-frame', type=int, default=0)
     parser.add_argument('--end-frame', type=int, help='Exclusive; defaults to episode length')
     parser.add_argument('--prepare-only', action='store_true', help='No API import, key, or network needed')

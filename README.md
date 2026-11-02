@@ -1,5 +1,11 @@
 # Automatic Text Annotation
 
+> **Franka/Wuji LeRobot 输入输出接口（开发中）**：新的入口是
+> `python -m lerobot_annotation`。交付目录保持 LeRobot v2.1 布局，逐帧
+> `task_index` 对应细分步骤，调试材料单独存放。使用方法、自动化与上传限制见
+> [LeRobot 标注接口说明](docs/lerobot_annotation.md)。下面保留的原管道文档
+> 含历史用法，不能据此认为新接口已经集成全部 Stage 1–5 能力。
+
 一个基于AI模型的多阶段视频自动标注管道，专门用于处理第一人称视角（egocentric）视频的自动标注任务。
 
 ## 项目概述

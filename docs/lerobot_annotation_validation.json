@@ -1,0 +1,58 @@
+{
+  "branch": "feature/lerobot-annotation-roundtrip",
+  "unit_tests": 14,
+  "existing_demo_tests": 6,
+  "tests_passed": true,
+  "real_data_roundtrip": {
+    "test_kind": "real_sensor_roundtrip_with_synthetic_labels",
+    "source": "/home/ty/company-remote-2/real/harvest-tomato/data/data-lerobot/wuji/A/209_213_data_lerobot",
+    "episode_index": 0,
+    "frame_count": 3520,
+    "api_calls": 0,
+    "remote_writes": 0,
+    "semantic_annotation_verified": false,
+    "temporary_datasets_removed_after_test": true,
+    "verification": {
+      "status": "passed",
+      "episodes": 1,
+      "frames": 3520,
+      "all_non_task_values_equal": true,
+      "video_checksums_equal": true,
+      "arrow_schemas_equal": true,
+      "model_semantic_correctness_certified": false
+    }
+  },
+  "test_dataset_preflight": {
+    "status": "passed",
+    "scope": "metadata/schema/artifact preflight only; no full payload comparison",
+    "source": "/home/ty/company-remote-2/real/harvest-tomato/data/data-lerobot/wuji/A/209_213_data_lerobot",
+    "episodes": 5,
+    "frames": 20283,
+    "cameras": [
+      "observation.images.cam0",
+      "observation.images.cam1",
+      "observation.images.cam2"
+    ],
+    "artifact_bytes": 2852486001,
+    "signature": "1d315fd3a658c144f4ad521e259abdf969e33c671b0faccf37adb78a486c204b"
+  },
+  "format_reference_preflight": {
+    "status": "passed",
+    "scope": "metadata/schema/artifact preflight only; no full payload comparison",
+    "source": "/home/ty/company-remote-2/real/harvest-tomato/data/data-lerobot/wuji/A/.ingest/streams/batch-000001/.worker-generations/current/gen-00000078-866e4d79a08e4138a66a3a4c35d99be2",
+    "episodes": 78,
+    "frames": 72229,
+    "cameras": [
+      "observation.images.cam0",
+      "observation.images.cam1",
+      "observation.images.cam2"
+    ],
+    "artifact_bytes": 8660871687,
+    "signature": "483a43428428c7996ce0727f4943ad9341d44ac14a2278ac3fbb51d72be740ea"
+  },
+  "api_calls_this_change": 0,
+  "remote_dataset_writes": 0,
+  "production_ui_integration_tested": false,
+  "docker_image_built": false,
+  "semantic_model_end_to_end_tested": false
+}
