@@ -131,40 +131,6 @@ def validate_segments(segments, length):
         raise ValueError("Unannotated episode tail")
 
 
-def select_prefix(source, limit):
-    """Read a leading subset directly from source; no input files are copied.
-
-    A prefix preserves episode_index/global index without reindexing sensor rows.
-    Output metadata explicitly describes the selected subset, not the full input.
-    """
-    if limit is None:
-        return source
-    if type(limit) is not int or not 1 <= limit <= len(source["episodes"]):
-        raise ValueError("episode-limit must be between 1 and the source episode count")
-    result = dict(source)
-    result["original_info"] = source["info"]
-    result["episodes"] = source["episodes"][:limit]
-    result["stats"] = source["stats"][:limit]
-    info = deepcopy(source["info"])
-    info.update(total_episodes=limit, total_frames=sum(ep["length"] for ep in result["episodes"]),
-                total_videos=limit * len(source["cameras"]),
-                total_chunks=(limit + info["chunks_size"] - 1) // info["chunks_size"])
-    splits = {}
-    for name, span in info["splits"].items():
-        a, b = map(int, span.split(":"))
-        if min(a, limit) < min(b, limit):
-            splits[name] = f"{min(a,limit)}:{min(b,limit)}"
-    info["splits"] = splits
-    result["info"] = info
-    paths = set()
-    for ep in result["episodes"]:
-        paths.add(path_for(info, ep["episode_index"]))
-        paths.update(path_for(info, ep["episode_index"], video_key=c) for c in source["cameras"])
-    result["artifacts"] = [row for row in source["artifacts"] if row["path"] in paths]
-    result["bytes"] = sum(row["bytes"] for row in result["artifacts"])
-    return result
-
-
 def task_stats(indices):
     n = len(indices)
     mean = sum(indices) / n

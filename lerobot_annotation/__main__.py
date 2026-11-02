@@ -26,8 +26,6 @@ def main():
     annotate.add_argument("--window-seconds", type=float, default=30)
     annotate.add_argument("--attempts", type=int, default=2)
     annotate.add_argument("--max-api-calls", type=int, default=300)
-    annotate.add_argument("--episode-limit", type=int,
-                          help="Test only the first N episodes; output metadata describes this subset")
     annotate.add_argument("--upload-targets", type=Path, help="Optional explicit mounted receivers; no defaults")
     transfer = commands.add_parser("upload", help="Resume append-only upload after annotation completion")
     transfer.add_argument("--output", type=Path, required=True)
@@ -53,8 +51,7 @@ def main():
             parser.error("Sampling/window must be finite and positive")
         output = run(args.input, args.output, args.work, model=args.model,
                      video_fps=args.video_fps, window_seconds=args.window_seconds,
-                     attempts=args.attempts, max_calls=args.max_api_calls,
-                     episode_limit=args.episode_limit)
+                     attempts=args.attempts, max_calls=args.max_api_calls)
     else:
         output = args.output.resolve()
         proof_path = args.work / "completed.json"

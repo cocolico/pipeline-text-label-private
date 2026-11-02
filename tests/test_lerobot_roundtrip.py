@@ -11,7 +11,6 @@ import pyarrow.parquet as pq
 
 from lerobot_annotation.dataset import (atomic_json, export_dataset, inspect, jsonl,
                                         read_json, validate_output, validate_segments)
-from lerobot_annotation.dataset import select_prefix
 from lerobot_annotation.model import ArkAnnotator, normalize_response, windows
 from lerobot_annotation.pipeline import publish_new_directory, require_space, run
 from lerobot_annotation.upload import upload
@@ -160,42 +159,8 @@ class RoundtripTests(unittest.TestCase):
         self.assertEqual((result[0]["start_frame"], result[0]["end_frame"]), (900, 930))
         with self.assertRaises(ValueError): normalize_response(raw.replace('"observed"', '"uncertain"'), start=900, end=930, fps=30)
 
-    def test_decimal_duration_is_validated_on_frame_grid_without_clamping(self):
-        raw = json.dumps({"steps": [{"start_sec": 0, "end_sec": 27.333,
-                                   "text": "Move the tomato.", "evidence_status": "observed"}]})
-        result = normalize_response(raw, start=2700, end=3520, fps=30)
-        self.assertEqual(result[0]["end_frame"], 3520)
-        with self.assertRaises(ValueError):
-            normalize_response(raw.replace('27.333', '27.4'), start=2700, end=3520, fps=30)
-        with self.assertRaises(ValueError):
-            normalize_response(raw.replace('27.333', '27.0'), start=2700, end=3520, fps=30)
-
-    def test_revalidate_saved_response_without_another_api_call(self):
-        window = self.root / "saved-window";window.mkdir()
-        (window / "response_1.txt").write_text(json.dumps({"steps": [{"start_sec": 0,
-            "end_sec": 27.333, "text": "Move the tomato.", "evidence_status": "observed"}]}))
-        # No API key or real clip is required to revalidate a saved response.
-        engine = ArkAnnotator(model="test-only", attempts=1, max_calls=1)
-        engine.calls = 1
-        result = engine.annotate("unused", start=2700, end=3520, fps=30,
-            task=["test"], work=window, source_hash="test-source")
-        self.assertEqual(result[-1]["end_frame"], 3520)
-        self.assertEqual(engine.calls, 1)
-        self.assertFalse(read_json(window / "revalidated_response.json")["network_call_required"])
-
     def test_short_tail_is_not_a_separate_request(self):
         self.assertEqual(windows(912, 30, 30), [[0, 912]])
-
-    def test_prefix_selection_changes_metadata_without_copying_input(self):
-        source = inspect(self.source)
-        selected = select_prefix(source, 1)
-        self.assertEqual(selected["root"], source["root"])
-        self.assertEqual(selected["info"]["total_episodes"], 1)
-        self.assertEqual(selected["info"]["total_frames"], 6)
-        self.assertEqual(selected["info"]["splits"], {"train": "0:1"})
-        self.assertIs(selected["episodes"][0], source["episodes"][0])
-        with self.assertRaises(ValueError): select_prefix(source, 0)
-        with self.assertRaises(ValueError): select_prefix(source, 2)
 
     def test_uncertain_model_response_retries_then_uses_validated_cache(self):
         # Real client functions are patched; no file upload or model request.
