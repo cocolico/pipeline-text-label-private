@@ -1,0 +1,11 @@
+FROM python:3.12-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY requirements_annotation.txt /app/
+RUN pip install --no-cache-dir -r requirements_annotation.txt
+COPY lerobot_annotation/ /app/lerobot_annotation/
+COPY api/api_seed_openai_easy_no_short_step/api_client_qwen_v2.py /app/api/api_seed_openai_easy_no_short_step/api_client_qwen_v2.py
+COPY demos/franka_wuji/run_demo.py /app/demos/franka_wuji/run_demo.py
+ENTRYPOINT ["python", "-m", "lerobot_annotation"]
+CMD ["--help"]

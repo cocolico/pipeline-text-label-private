@@ -31,8 +31,8 @@ not an assertion that the first 30 seconds form one semantic step.
 ```bash
 python3 demos/franka_wuji/run_demo.py \
   --dataset-root "$DATASET_ROOT" \
-  --run-dir "$DEMO_ROOT/ep000000_cam1_first30s" \
-  --episode 0 --camera cam1 --start-frame 0 --end-frame 900 \
+  --run-dir "$DEMO_ROOT/ep000000_cam0_first30s" \
+  --episode 0 --camera cam0 --start-frame 0 --end-frame 900 \
   --prepare-only
 ```
 
@@ -40,7 +40,7 @@ Prepare-only copies only the chosen camera's full source video locally, checks
 SHA256, decodes/counts the source and selected clip, compares dimensions/FPS/frame
 count with metadata, then saves manifest and prompts. It does not inspect Parquet
 rows or prove multimodal alignment. For episode 0 expected source: 3520 frames,
-30 FPS, 640x480; first clip: 900 frames, 30 seconds.
+30 FPS, 640x400; first clip: 900 frames, 30 seconds.
 
 Configure credentials without embedding them in source or command history:
 
@@ -56,8 +56,8 @@ Run the same command without `--prepare-only`, with the new interpreter:
 ```bash
 /home/ty/ty_works/.venv-franka-wuji-demo/bin/python demos/franka_wuji/run_demo.py \
   --dataset-root "$DATASET_ROOT" \
-  --run-dir "$DEMO_ROOT/ep000000_cam1_first30s" \
-  --episode 0 --camera cam1 --start-frame 0 --end-frame 900
+  --run-dir "$DEMO_ROOT/ep000000_cam0_first30s" \
+  --episode 0 --camera cam0 --start-frame 0 --end-frame 900
 ```
 
 There is no automatic retry. Inspect raw_response.txt and run_summary.json on
@@ -71,8 +71,8 @@ After inspecting the short result, run the complete episode in a NEW run directo
 ```bash
 /home/ty/ty_works/.venv-franka-wuji-demo/bin/python demos/franka_wuji/run_demo.py \
   --dataset-root "$DATASET_ROOT" \
-  --run-dir "$DEMO_ROOT/ep000000_cam1_full" \
-  --episode 0 --camera cam1 --end-frame 3520
+  --run-dir "$DEMO_ROOT/ep000000_cam0_full" \
+  --episode 0 --camera cam0 --end-frame 3520
 ```
 
 Model ID, endpoint, sampling FPS, prompt, source fingerprint or interval changes
@@ -101,7 +101,7 @@ Open report.html locally. If file video playback is restricted, serve only the
 run directory bound to localhost, using a separate terminal:
 
 ```bash
-python3 -m http.server 8765 --bind 127.0.0.1 --directory "$DEMO_ROOT/ep000000_cam1_first30s"
+python3 -m http.server 8765 --bind 127.0.0.1 --directory "$DEMO_ROOT/ep000000_cam0_first30s"
 ```
 
 Then open http://127.0.0.1:8765/report.html. Video player time is clip-local;

@@ -31,3 +31,4 @@ step_clips/
 annotation_runs/
 resource_monitor_logs/
 *.tmp
+.vscode/
